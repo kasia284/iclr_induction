@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import plotly.graph_objects as go
 import tqdm
+import torch
+import torch.nn.functional as F
 
 from utils import (
     WORDS, LAYER, SEQ_LEN, WORD_TO_COLOR,
@@ -17,7 +19,7 @@ from utils import (
 )
 
 DATA_DIR = "results/reproduce/data"
-PLOTS_DIR = "results/reproduce/plots"
+PLOTS_DIR = "results/reproduce/plots/layernorm"
 N_LOOKBACK = 200
 
 
@@ -64,52 +66,25 @@ def plot_accuracy_curve(all_accs):
     save_plotly(pfig, PLOTS_DIR, "accuracy_curve.html")
 
 
-# ── Fig 2 Right: Class-mean PCA ───────────────────────────────────────────────
+# ── Fig 2 Right & Neighbor Mixing: Class-mean PCA ─────────────────────────────
 
-# def plot_class_mean_pca(grid, class_means, pca_dirs):
-#     """Scatter of 16 class-mean centroids with grid edges."""
-#     projected = class_means @ pca_dirs.T  # [16, 2]
-
-#     fig, ax = plt.subplots(figsize=(5, 5))
-
-#     # Grid edges (gray dashed)
-#     A = grid.build_adjacency_matrix()
-#     for i in range(len(WORDS)):
-#         for j in range(i + 1, len(WORDS)):
-#             if A[i, j]:
-#                 ax.plot(
-#                     [projected[i, 0].item(), projected[j, 0].item()],
-#                     [projected[i, 1].item(), projected[j, 1].item()],
-#                     color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
-#                 )
-
-#     # Scatter + labels
-#     for i, word in enumerate(WORDS):
-#         ax.scatter(
-#             projected[i, 0].item(), projected[i, 1].item(),
-#             color=WORD_TO_COLOR[word], s=120, marker="*",
-#             edgecolors="black", linewidths=0.5, zorder=5,
-#         )
-#         ax.annotate(
-#             word, (projected[i, 0].item(), projected[i, 1].item()),
-#             xytext=(5, 5), textcoords="offset points", fontsize=8,
-#             bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-#         )
-
-#     ax.set_xlabel("PC1")
-#     ax.set_ylabel("PC2")
-#     ax.set_title("PCA of per-node mean activations", fontsize=10)
-#     ax.set_aspect("equal")
-#     save_figure(fig, PLOTS_DIR, "pca_class_means.pdf")
-#     print("Saved pca_class_means")
-
-#     # ── Plotly interactive ───────────────────────────────────────────────────
-#     pfig = go.Figure(data=plotly_pca_traces(projected, grid))
-#     pfig.update_layout(**plotly_pca_layout("PCA of per-node mean activations"))
-#     save_plotly(pfig, PLOTS_DIR, "pca_class_means.html")
-
-def plot_class_mean_pca(grid, class_means, pca_dirs):
-    """Scatter of 16 class-mean centroids with grid edges (Supports 2D and 3D)."""
+def plot_class_mean_pca(
+    grid, 
+    class_means, 
+    pca_dirs, 
+    explained_variance=None, 
+    title="PCA of per-node mean activations", 
+    filename_stem="pca_class_means"
+):
+    """
+    Scatter of 16 class-mean centroids with grid edges (Supports 2D and 3D).
+    
+    Parameters:
+    -----------
+    explained_variance : array-like, optional
+        The fraction of variance explained by each principal component 
+        (e.g., pca.explained_variance_ratio_). Expects shape [num_components].
+    """
     projected = class_means @ pca_dirs.T  # [16, num_components]
     num_dims = projected.shape[1]
     is_3d = (num_dims == 3)
@@ -148,7 +123,6 @@ def plot_class_mean_pca(grid, class_means, pca_dirs):
                 color=WORD_TO_COLOR[word], s=120, marker="*",
                 edgecolors="black", linewidths=0.5, zorder=5,
             )
-            # ax.text is used for 3D positioning instead of ax.annotate
             ax.text(
                 projected[i, 0].item(), projected[i, 1].item(), projected[i, 2].item(),
                 word, fontsize=8,
@@ -166,30 +140,52 @@ def plot_class_mean_pca(grid, class_means, pca_dirs):
                 bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
             )
 
-    # Axis Labels & Aspect Ratio
-    ax.set_xlabel("PC1")
-    ax.set_ylabel("PC2")
+    # ── Compute Axis Labels with Variance Explained ─────────────────────────
+    if explained_variance is not None:
+        lbl_pc1 = f"PC1 ({explained_variance[0]*100:.1f}%)"
+        lbl_pc2 = f"PC2 ({explained_variance[1]*100:.1f}%)"
+        lbl_pc3 = f"PC3 ({explained_variance[2]*100:.1f}%)" if is_3d else ""
+    else:
+        lbl_pc1, lbl_pc2, lbl_pc3 = "PC1", "PC2", "PC3"
+
+    ax.set_xlabel(lbl_pc1)
+    ax.set_ylabel(lbl_pc2)
     
     if is_3d:
-        ax.set_zlabel("PC3")
-        ax.set_box_aspect((1, 1, 1))  # Sets equal aspect ratio for 3D bounding box
+        ax.set_zlabel(lbl_pc3)
+        ax.set_box_aspect((1, 1, 1))
     else:
         ax.set_aspect("equal")
         
-    ax.set_title(f"{'3D ' if is_3d else ''}PCA of per-node mean activations", fontsize=10)
+    ax.set_title(f"{'3D ' if is_3d else ''}{title}", fontsize=10)
     
-    # Save files with distinct names depending on dimensions
     dim_suffix = "3d" if is_3d else "2d"
-    save_figure(fig, PLOTS_DIR, f"pca_class_means_{dim_suffix}.pdf")
-    print(f"Saved pca_class_means_{dim_suffix}")
+    out_name = f"{filename_stem}_{dim_suffix}"
+    
+    save_figure(fig, PLOTS_DIR, f"{out_name}.pdf")
+    print(f"Saved {out_name}")
 
     # ── Plotly interactive ───────────────────────────────────────────────────
-    # Note: Ensure your `plotly_pca_traces` helper is capable of reading 
-    # the second dimension of `projected` to return `go.Scatter3d` traces.
     pfig = go.Figure(data=plotly_pca_traces(projected, grid))
-    pfig.update_layout(**plotly_pca_layout(f"{'3D ' if is_3d else ''}PCA of per-node mean activations"))
-    save_plotly(pfig, PLOTS_DIR, f"pca_class_means_{dim_suffix}.html")
+    
+    # Extract base layout configurations
+    layout_kwargs = plotly_pca_layout(f"{'3D ' if is_3d else ''}{title}")
+    
+    # Dynamically injection of custom axis titles into Plotly layout
+    if is_3d:
+        layout_kwargs.setdefault('scene', {}).update({
+            'xaxis': {'title': lbl_pc1},
+            'yaxis': {'title': lbl_pc2},
+            'zaxis': {'title': lbl_pc3}
+        })
+    else:
+        layout_kwargs.update({
+            'xaxis': {'title': lbl_pc1},
+            'yaxis': {'title': lbl_pc2}
+        })
 
+    pfig.update_layout(**layout_kwargs)
+    save_plotly(pfig, PLOTS_DIR, f"{out_name}.html")
     
 # ── Fig 6: Bigram PCA ─────────────────────────────────────────────────────────
 
@@ -266,7 +262,6 @@ def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
     # ── Plotly interactive ───────────────────────────────────────────────────
     pfig = go.Figure(data=plotly_pca_traces(projected_means, grid))
 
-    # Individual bigram points — group by current word for legend toggle
     for word in WORDS:
         idxs = [idx for idx in range(1, len(tail)) if tail[idx] == word]
         if not idxs:
@@ -296,7 +291,6 @@ def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
         "PCA of individual activations, labeled by bigram"))
     pfig.update_layout(width=1000, height=1000)
 
-    # Legend annotation (plotly has no custom legend handles like matplotlib)
     pfig.add_annotation(
         text=(
             "● Fill = current token<br>"
@@ -316,11 +310,14 @@ def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
 
 def main():
     setup_plotting()
+    plt.rcParams['text.usetex'] = False  # Bypassing missing LaTeX binaries
     grid = Grid()
 
     acc_path = os.path.join(DATA_DIR, "accuracies.npz")
     pca_path = os.path.join(DATA_DIR, "pca.npz")
     seq_path = os.path.join(DATA_DIR, "sequence.json")
+
+    model = None
 
     if os.path.exists(acc_path) and os.path.exists(pca_path) and os.path.exists(seq_path):
         print("Loading cached data (delete data/ to recompute)...")
@@ -329,6 +326,7 @@ def main():
         activations = pca_data["activations"]
         class_means = pca_data["class_means"]
         pca_dirs = pca_data["pca_dirs"]
+        explained_variance = pca_data.get("explained_variance", None) 
         with open(seq_path) as f:
             sequence = json.load(f)
     else:
@@ -348,24 +346,107 @@ def main():
         # PCA data
         set_seed(42)
         sequence = grid.generate_sequence(SEQ_LEN)
-        # activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK)
-        activations_t = get_activations(model, sequence, 0, N_LOOKBACK)
+        activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK)
         class_means_t = compute_class_means(activations_t, sequence, WORDS, N_LOOKBACK)
-        pca_dirs_t = compute_pca_directions(class_means_t, top_n=3)
+        
+        pca_dirs_t, explained_variance = compute_pca_directions(class_means_t, top_n=3)
 
         activations = activations_t.cpu().numpy()
         class_means = class_means_t.cpu().numpy()
         pca_dirs = pca_dirs_t.cpu().numpy()
 
-        np.savez(pca_path, activations=activations, class_means=class_means, pca_dirs=pca_dirs)
-        with open(seq_path, "w") as f:
+        np.savez(pca_path, activations=activations, class_means=class_means, 
+                 pca_dirs=pca_dirs, explained_variance=explained_variance)
+        with open(seq_path) as f:
             json.dump(sequence, f)
         print(f"Cached {pca_path}")
 
-    # ── Plotting ──────────────────────────────────────────────────────────────
+    # ── Original Plotting ─────────────────────────────────────────────────────
     plot_accuracy_curve(all_accs)
-    plot_class_mean_pca(grid, class_means, pca_dirs)
+    plot_class_mean_pca(grid, class_means, pca_dirs, 
+                        explained_variance=explained_variance, 
+                        title="PCA of per-node mean activations", 
+                        filename_stem="pca_class_means")
     plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs)
+
+    # ── Embedding Neighbor Mixing Simulation ──────────────────────────────────
+    print("\n--- Extracting Initial Embeddings and Simulating Neighbor Mixing ---")
+    if model is None:
+        print("Loading model to extract base embeddings...")
+        model = load_model()
+        
+    try:
+        embed_acts_t = get_activations(model, sequence, layer=0, n_lookback=N_LOOKBACK)
+        embs_round_0 = compute_class_means(embed_acts_t, sequence, WORDS, N_LOOKBACK).cpu().numpy()
+        
+        A_torch = torch.tensor(grid.build_adjacency_matrix(), dtype=torch.float32)
+        degree = A_torch.sum(dim=1, keepdim=True)
+        
+        embs_round_0_t = torch.tensor(embs_round_0, dtype=torch.float32)
+        
+        # Helper function for functional RMSNorm (Llama style: no mean centering)
+        def rms_norm(tensor, eps=1e-6):
+            rms = torch.sqrt(torch.mean(tensor ** 2, dim=-1, keepdim=True) + eps)
+            return tensor / rms
+
+        # Mix and normalize using Pre-Norm architecture up to 10 rounds
+        embs_by_round = {0: embs_round_0_t}
+        embs_curr_t = embs_round_0_t
+        
+        for r in range(1, 11):
+            # 1. Pre-normalize the current states
+            normalized_embs = rms_norm(embs_curr_t)
+            
+            # 2. Apply mixing to normalized states and add to the unnormalized residual stream
+            embs_curr_t = embs_curr_t + (A_torch @ normalized_embs) / degree
+            
+            if r in [1, 2, 3, 4, 10]:
+                embs_by_round[r] = embs_curr_t
+        
+        embs_round_1 = embs_by_round[1].numpy()
+        embs_round_2 = embs_by_round[2].numpy()
+        embs_round_3 = embs_by_round[3].numpy()
+        embs_round_4 = embs_by_round[4].numpy()
+        embs_round_10 = embs_by_round[10].numpy()
+
+        # Plot 0 rounds
+        pca_dirs_0, var_0 = compute_pca_directions(embs_by_round[0], top_n=2)
+        plot_class_mean_pca(grid, embs_round_0, pca_dirs_0.numpy(), explained_variance=var_0,
+                            title="PCA of Learned Embeddings\n(0 rounds mixing)",
+                            filename_stem="learned_embs_mixing_0_rmsnorm")
+
+        # Plot 1 round
+        pca_dirs_1, var_1 = compute_pca_directions(embs_by_round[1], top_n=2)
+        plot_class_mean_pca(grid, embs_round_1, pca_dirs_1.numpy(), explained_variance=var_1,
+                            title="PCA of Learned Embeddings\n(after 1 round of Pre-RMSNorm mixing)",
+                            filename_stem="learned_embs_mixing_1_rmsnorm")
+
+        # Plot 2 rounds
+        pca_dirs_2, var_2 = compute_pca_directions(embs_by_round[2], top_n=2)
+        plot_class_mean_pca(grid, embs_round_2, pca_dirs_2.numpy(), explained_variance=var_2,
+                            title="PCA of Learned Embeddings\n(after 2 rounds of Pre-RMSNorm mixing)",
+                            filename_stem="learned_embs_mixing_2_rmsnorm")
+
+        # Plot 3 rounds
+        pca_dirs_3, var_3 = compute_pca_directions(embs_by_round[3], top_n=2)
+        plot_class_mean_pca(grid, embs_round_3, pca_dirs_3.numpy(), explained_variance=var_3,
+                            title="PCA of Learned Embeddings\n(after 3 rounds of Pre-RMSNorm mixing)",
+                            filename_stem="learned_embs_mixing_3_rmsnorm")
+
+        # Plot 4 rounds
+        pca_dirs_4, var_4 = compute_pca_directions(embs_by_round[4], top_n=2)
+        plot_class_mean_pca(grid, embs_round_4, pca_dirs_4.numpy(), explained_variance=var_4,
+                            title="PCA of Learned Embeddings\n(after 4 rounds of Pre-RMSNorm mixing)",
+                            filename_stem="learned_embs_mixing_4_rmsnorm")
+
+        # Plot 10 rounds
+        pca_dirs_10, var_10 = compute_pca_directions(embs_by_round[10], top_n=2)
+        plot_class_mean_pca(grid, embs_round_10, pca_dirs_10.numpy(), explained_variance=var_10,
+                            title="PCA of Learned Embeddings\n(after 10 rounds of Pre-RMSNorm mixing)",
+                            filename_stem="learned_embs_mixing_10_rmsnorm")
+
+    except Exception as e:
+        print(f"Skipping learned embedding mixing due to error: {e}")
 
 
 if __name__ == "__main__":

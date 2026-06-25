@@ -15,6 +15,7 @@ from torch import Tensor
 from jaxtyping import Float
 from transformer_lens import HookedTransformer, utils
 from transformer_lens.hook_points import HookPoint
+from typing import Tuple
 
 torch.set_grad_enabled(False)
 
@@ -207,14 +208,30 @@ def compute_class_means(
     return torch.stack(means)  # [16, d_model]
 
 
+# def compute_pca_directions(
+#     class_means: Float[Tensor, "n_words d_model"],
+#     top_n: int = 2,
+# ) -> Float[Tensor, "top_n d_model"]:
+#     """PCA on the 16 class-mean vectors. Returns top_n right singular vectors."""
+#     centered = class_means - class_means.mean(dim=0, keepdim=True)
+#     _, _, V = torch.svd(centered)
+#     return einops.rearrange(V, "d_model n -> n d_model")[:top_n, :]
+
+
 def compute_pca_directions(
     class_means: Float[Tensor, "n_words d_model"],
     top_n: int = 2,
-) -> Float[Tensor, "top_n d_model"]:
-    """PCA on the 16 class-mean vectors. Returns top_n right singular vectors."""
+) -> Tuple[Float[Tensor, "top_n d_model"], np.ndarray]:
+    """PCA on the 16 class-mean vectors. Returns top_n right singular vectors and variance ratio."""
     centered = class_means - class_means.mean(dim=0, keepdim=True)
-    _, _, V = torch.svd(centered)
-    return einops.rearrange(V, "d_model n -> n d_model")[:top_n, :]
+    U, S, V = torch.svd(centered)
+    
+    # Calculate fraction of variance explained
+    variance_explained = (S ** 2) / torch.sum(S ** 2)
+    explained_variance_ratio = variance_explained[:top_n].cpu().numpy()
+    
+    pca_dirs = einops.rearrange(V, "d_model n -> n d_model")[:top_n, :]
+    return pca_dirs, explained_variance_ratio
 
 
 # ── Ablation hooks ─────────────────────────────────────────────────────────────
