@@ -22,6 +22,86 @@ PLOTS_DIR = "results/reproduce/plots"
 N_LOOKBACK = 200
 
 
+def plot_class_mean_projection(grid, projected, title="Projection", filename_stem="proj"):
+    """Scatter of 16 class-mean centroids with grid edges for direct projections (t-SNE/UMAP)."""
+    num_dims = projected.shape[1]
+    is_3d = (num_dims == 3)
+
+    # Setup the figure canvas based on dimensionality
+    if is_3d:
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(projection='3d')
+    else:
+        fig, ax = plt.subplots(figsize=(5, 5))
+
+    # Grid edges (gray dashed)
+    A = grid.build_adjacency_matrix()
+    for i in range(len(WORDS)):
+        for j in range(i + 1, len(WORDS)):
+            if A[i, j]:
+                if is_3d:
+                    ax.plot(
+                        [projected[i, 0].item(), projected[j, 0].item()],
+                        [projected[i, 1].item(), projected[j, 1].item()],
+                        [projected[i, 2].item(), projected[j, 2].item()],
+                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    )
+                else:
+                    ax.plot(
+                        [projected[i, 0].item(), projected[j, 0].item()],
+                        [projected[i, 1].item(), projected[j, 1].item()],
+                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    )
+
+    # Scatter + labels
+    for i, word in enumerate(WORDS):
+        if is_3d:
+            ax.scatter(
+                projected[i, 0].item(), projected[i, 1].item(), projected[i, 2].item(),
+                color=WORD_TO_COLOR[word], s=120, marker="*",
+                edgecolors="black", linewidths=0.5, zorder=5,
+            )
+            ax.text(
+                projected[i, 0].item(), projected[i, 1].item(), projected[i, 2].item(),
+                word, fontsize=8,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
+            )
+        else:
+            ax.scatter(
+                projected[i, 0].item(), projected[i, 1].item(),
+                color=WORD_TO_COLOR[word], s=120, marker="*",
+                edgecolors="black", linewidths=0.5, zorder=5,
+            )
+            ax.annotate(
+                word, (projected[i, 0].item(), projected[i, 1].item()),
+                xytext=(5, 5), textcoords="offset points", fontsize=8,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
+            )
+
+    # Axis Labels & Aspect Ratio
+    ax.set_xlabel("Dim 1")
+    ax.set_ylabel("Dim 2")
+    
+    if is_3d:
+        ax.set_zlabel("Dim 3")
+        ax.set_box_aspect((1, 1, 1))
+    else:
+        ax.set_aspect("equal")
+        
+    ax.set_title(f"{'3D ' if is_3d else ''}{title}", fontsize=10)
+    
+    dim_suffix = "3d" if is_3d else "2d"
+    out_name = f"{filename_stem}_{dim_suffix}"
+    
+    save_figure(fig, PLOTS_DIR, f"{out_name}.pdf")
+    print(f"Saved {out_name}")
+
+    # ── Plotly interactive ───────────────────────────────────────────────────
+    pfig = go.Figure(data=plotly_pca_traces(projected, grid))
+    pfig.update_layout(**plotly_pca_layout(f"{'3D ' if is_3d else ''}{title}"))
+    save_plotly(pfig, PLOTS_DIR, f"{out_name}.html")
+
+
 # ── Fig 2 Left: Accuracy curve ────────────────────────────────────────────────
 
 def plot_accuracy_curve(all_accs):
@@ -274,120 +354,76 @@ def main():
     plt.rcParams['text.usetex'] = False  # Bypassing missing LaTeX binaries
     grid = Grid()
 
-    acc_path = os.path.join(DATA_DIR, "accuracies.npz")
-    pca_path = os.path.join(DATA_DIR, "pca.npz")
-    seq_path = os.path.join(DATA_DIR, "sequence.json")
+    # acc_path = os.path.join(DATA_DIR, "accuracies.npz")
+    # pca_path = os.path.join(DATA_DIR, "pca.npz")
+    # seq_path = os.path.join(DATA_DIR, "sequence.json")
 
     # We defer loading the model unless we strictly need it. 
     # If caches are missing OR we need to extract raw embeddings, we will load it.
     model = None
 
-    if os.path.exists(acc_path) and os.path.exists(pca_path) and os.path.exists(seq_path):
-        print("Loading cached data (delete data/ to recompute)...")
-        all_accs = np.load(acc_path)["all_accs"]
-        pca_data = np.load(pca_path)
-        activations = pca_data["activations"]
-        class_means = pca_data["class_means"]
-        pca_dirs = pca_data["pca_dirs"]
-        with open(seq_path) as f:
-            sequence = json.load(f)
-    else:
-        model = load_model()
-        os.makedirs(DATA_DIR, exist_ok=True)
+    # if os.path.exists(acc_path) and os.path.exists(pca_path) and os.path.exists(seq_path):
+    #     print("Loading cached data (delete data/ to recompute)...")
+    #     all_accs = np.load(acc_path)["all_accs"]
+    #     pca_data = np.load(pca_path)
+    #     activations = pca_data["activations"]
+    #     class_means = pca_data["class_means"]
+    #     pca_dirs = pca_data["pca_dirs"]
+    #     with open(seq_path) as f:
+    #         sequence = json.load(f)
+    # else:
+    #     model = load_model()
+    #     os.makedirs(DATA_DIR, exist_ok=True)
 
-        # Accuracy data
-        set_seed(42)
-        sequences = grid.generate_batch(SEQ_LEN)
-        all_accs = []
-        for seq in tqdm.tqdm(sequences, desc="Accuracy curves"):
-            all_accs.append(get_model_accuracies(model, grid, seq))
-        all_accs = np.array(all_accs)
-        np.savez(acc_path, all_accs=all_accs)
-        print(f"Cached {acc_path}")
+    #     # PCA data
+    #     set_seed(42)
+    #     sequence = grid.generate_sequence(SEQ_LEN)
+    #     activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK)
+    #     class_means_t = compute_class_means(activations_t, sequence, WORDS, N_LOOKBACK)
+    #     pca_dirs_t, fve = compute_pca_directions(class_means_t, top_n=3)
 
-        # PCA data
-        set_seed(42)
-        sequence = grid.generate_sequence(SEQ_LEN)
-        activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK)
-        class_means_t = compute_class_means(activations_t, sequence, WORDS, N_LOOKBACK)
-        pca_dirs_t = compute_pca_directions(class_means_t, top_n=3)
+    #     activations = activations_t.cpu().numpy()
+    #     class_means = class_means_t.cpu().numpy()
+    #     pca_dirs = pca_dirs_t.cpu().numpy()
 
-        activations = activations_t.cpu().numpy()
-        class_means = class_means_t.cpu().numpy()
-        pca_dirs = pca_dirs_t.cpu().numpy()
-
-        np.savez(pca_path, activations=activations, class_means=class_means, pca_dirs=pca_dirs)
-        with open(seq_path, "w") as f:
-            json.dump(sequence, f)
-        print(f"Cached {pca_path}")
-
-    # ── Original Plotting ─────────────────────────────────────────────────────
-    plot_accuracy_curve(all_accs)
-    plot_class_mean_pca(grid, class_means, pca_dirs, 
-                        title="PCA of per-node mean activations", 
-                        filename_stem="pca_class_means")
-    plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs)
-
-    # ── Embedding Neighbor Mixing Simulation ──────────────────────────────────
-    print("\n--- Extracting Initial Embeddings and Simulating Neighbor Mixing ---")
-    if model is None:
-        print("Loading model to extract base embeddings...")
-        model = load_model()
+    # if model is None:
+    #     print("Loading model to extract base embeddings...")
+    #     model = load_model()
         
-    try:
-        # Get activations immediately following the embedding layer (layer 0)
-        embed_acts_t = get_activations(model, sequence, layer=0, n_lookback=N_LOOKBACK)
-        
-        # Calculate centroids of the 16 tokens to isolate the core word embedding representations
-        embs_round_0 = compute_class_means(embed_acts_t, sequence, WORDS, N_LOOKBACK).cpu().numpy()
-        
-        A_torch = torch.tensor(grid.build_adjacency_matrix(), dtype=torch.float32)
-        degree = A_torch.sum(dim=1, keepdim=True)
-        
-        # Mixing operations
-        embs_round_0_t = torch.tensor(embs_round_0)
-        embs_round_1_t = embs_round_0_t + (A_torch @ embs_round_0_t) / degree
-        embs_round_2_t = embs_round_1_t + (A_torch @ embs_round_1_t) / degree
-        embs_round_3_t = embs_round_2_t + (A_torch @ embs_round_2_t) / degree
-        embs_round_4_t = embs_round_3_t + (A_torch @ embs_round_3_t) / degree
-        
-        embs_round_1 = embs_round_1_t.numpy()
-        embs_round_2 = embs_round_2_t.numpy()
-        embs_round_3 = embs_round_3_t.numpy()
-        embs_round_4 = embs_round_4_t.numpy()
+    model = load_model()
 
-        # Plot 0 rounds
-        pca_dirs_0 = compute_pca_directions(torch.tensor(embs_round_0), top_n=2).numpy()
-        plot_class_mean_pca(grid, embs_round_0, pca_dirs_0,
-                            title="PCA of Learned Embeddings\n(0 rounds mixing)",
-                            filename_stem="learned_embs_mixing_0")
+    from sklearn.manifold import TSNE
+    import umap
+    
+    set_seed(42)
+    sequence = grid.generate_sequence(SEQ_LEN)
 
-        # Plot 1 round
-        pca_dirs_1 = compute_pca_directions(embs_round_1_t, top_n=2).numpy()
-        plot_class_mean_pca(grid, embs_round_1, pca_dirs_1,
-                            title="PCA of Learned Embeddings\n(after 1 round of mixing)",
-                            filename_stem="learned_embs_mixing_1")
+    # Get activations immediately following the embedding layer (layer 0)
+    embed_acts_t = get_activations(model, sequence, layer=0, n_lookback=N_LOOKBACK)
+    
+    # Calculate centroids of the 16 tokens
+    embs_round_0 = compute_class_means(embed_acts_t, sequence, WORDS, N_LOOKBACK).cpu().numpy()
+    
+    embs_round_0_t = torch.tensor(embs_round_0)
 
-        # Plot 2 rounds
-        pca_dirs_2 = compute_pca_directions(embs_round_2_t, top_n=2).numpy()
-        plot_class_mean_pca(grid, embs_round_2, pca_dirs_2,
-                            title="PCA of Learned Embeddings\n(after 2 rounds of mixing)",
-                            filename_stem="learned_embs_mixing_2")
 
-        # Plot 3 rounds
-        pca_dirs_3 = compute_pca_directions(embs_round_3_t, top_n=2).numpy()
-        plot_class_mean_pca(grid, embs_round_3, pca_dirs_3,
-                            title="PCA of Learned Embeddings\n(after 3 rounds of mixing)",
-                            filename_stem="learned_embs_mixing_3")
+    # ── 2. t-SNE ─────────────────────────────────────────────────────────
+    # Perplexity must be less than n_samples (16)
+    tsne = TSNE(n_components=2, perplexity=5, random_state=42, init='pca')
+    projected_tsne = tsne.fit_transform(embs_round_0)
+    
+    plot_class_mean_projection(grid, projected_tsne,
+                                title="t-SNE of Learned Embeddings",
+                                filename_stem="learned_embs_tsne")
 
-        # Plot 4 rounds
-        pca_dirs_4 = compute_pca_directions(embs_round_4_t, top_n=2).numpy()
-        plot_class_mean_pca(grid, embs_round_4, pca_dirs_4,
-                            title="PCA of Learned Embeddings\n(after 4 rounds of mixing)",
-                            filename_stem="learned_embs_mixing_4")
-
-    except Exception as e:
-        print(f"Skipping learned embedding mixing due to error: {e}")
+    # ── 3. UMAP ──────────────────────────────────────────────────────────
+    # n_neighbors must be less than n_samples (16)
+    reducer = umap.UMAP(n_components=2, n_neighbors=5, min_dist=0.3, random_state=42)
+    projected_umap = reducer.fit_transform(embs_round_0)
+    
+    plot_class_mean_projection(grid, projected_umap,
+                                title="UMAP of Learned Embeddings",
+                                filename_stem="learned_embs_umap")
 
 
 if __name__ == "__main__":
