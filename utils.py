@@ -146,6 +146,15 @@ def set_seed(seed: int):
     np.random.seed(seed)
 
 
+# def set_seed(seed, model_seed):
+#     if seed:
+#         random.seed(seed)
+#         np.random.seed(seed)
+#     if model_seed:
+#         torch.manual_seed(model_seed)
+#         torch.cuda.manual_seed_all(model_seed)
+
+
 # ── Model loading ──────────────────────────────────────────────────────────────
 
 def load_model(cache_dir=None, device=None):
@@ -174,10 +183,12 @@ def load_toy_model(device=None):
         act_fn=None,
         attention_dir="causal",
         attn_only=True,
+        # normalization_type=None,
         device=device,
         seed=42,
     )
     return HookedTransformer(cfg)
+
 
 # ── Tokenization ──────────────────────────────────────────────────────────────
 

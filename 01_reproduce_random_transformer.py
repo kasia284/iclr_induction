@@ -14,20 +14,20 @@ from utils import (
     plotly_pca_layout, plotly_pca_traces, save_plotly, plot_attention_heatmaps
 )
 
-LAYER=0
-SEQ_LEN= 64
-PLOTS_DIR = "results/random-transformer/plots"
+LAYER = 0
+SEQ_LEN = 64
+PLOTS_DIR = "results/random-transformer/plots/LN"
 N_LOOKBACK = 50
-print(f"{SEQ_LEN=}, {N_LOOKBACK=}")
-BATCH_SIZE = 16
+BATCH_SIZE = 64
 
+print(f"{SEQ_LEN=}, {N_LOOKBACK=}")
 
 
 # ── Fig 2 Right: Class-mean PCA ───────────────────────────────────────────────
 
-def plot_class_mean_pca(grid, class_means, pca_dirs, title=None):
-    """Scatter of 16 class-mean centroids with grid edges."""
-    projected = class_means @ pca_dirs.T  # [16, 2]
+def plot_class_mean_pca(grid, class_means, pca_dirs, hp_str="", hp_title=""):
+    """Scatter of class-mean centroids with grid edges."""
+    projected = class_means @ pca_dirs.T 
 
     fig, ax = plt.subplots(figsize=(5, 5))
 
@@ -57,15 +57,17 @@ def plot_class_mean_pca(grid, class_means, pca_dirs, title=None):
 
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
-    ax.set_title("PCA of per-node mean activations", fontsize=10)
+    # Display the hyperparams on a new line in the title
+    ax.set_title(f"PCA of per-node mean activations\n{hp_title}", fontsize=10)
     ax.set_aspect("equal")
-    save_figure(fig, PLOTS_DIR, f"pca_class_means_{str(title)}.pdf")
-    print("Saved pca_class_means")
+    save_figure(fig, PLOTS_DIR, f"pca_class_means_{hp_str}.pdf")
+    print(f"Saved pca_class_means_{hp_str}.pdf")
 
     # ── Plotly interactive ───────────────────────────────────────────────────
     pfig = go.Figure(data=plotly_pca_traces(projected, grid))
-    pfig.update_layout(**plotly_pca_layout("PCA of per-node mean activations"))
-    save_plotly(pfig, PLOTS_DIR, f"pca_class_means.html")
+    # Use HTML line break <br> for Plotly titles
+    pfig.update_layout(**plotly_pca_layout(f"PCA of per-node mean activations<br><span style='font-size:12px'>{hp_title}</span>"))
+    save_plotly(pfig, PLOTS_DIR, f"pca_class_means_{hp_str}.html")
 
 
 # ── Fig 6: Bigram PCA ─────────────────────────────────────────────────────────
@@ -123,41 +125,35 @@ def _make_bigram_legend(ax):
               framealpha=1.0, edgecolor="gray", fontsize=8)
     
 
-def plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs):
+def plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs, hp_str="", hp_title=""):
     """Individual activations colored by (current token, previous token) for a batch of sequences."""
-    # projected_all automatically broadcasts to shape: [batch_size, N_LOOKBACK, 2]
     projected_all = activations @ pca_dirs.T        
-    projected_means = class_means @ pca_dirs.T      # [16, 2]
+    projected_means = class_means @ pca_dirs.T      
 
     # ── Main bigram plot (Matplotlib) ────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 8))
     
-    # Loop over every sequence in the batch to plot its individual tokens
     for b in range(len(sequences)):
         tail = sequences[b][-N_LOOKBACK:]
-        print("drawing bigram scatter for ", b)
-        # Pass the 2D slice for the current sequence in the batch
-        print(projected_all[b].shape)
         _draw_bigram_scatter(ax, projected_all[b], projected_means, tail, grid)
         
     _make_bigram_legend(ax)
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
-    ax.set_title("PCA of individual activations, labeled by bigram", fontsize=10)
+    # Display the hyperparams on a new line in the title
+    ax.set_title(f"PCA of individual activations, labeled by bigram\n{hp_title}", fontsize=10)
     ax.set_aspect("equal")
-    save_figure(fig, PLOTS_DIR, "bigram_pca.pdf")
-    print("Saved bigram_pca")
+    save_figure(fig, PLOTS_DIR, f"bigram_pca_{hp_str}.pdf")
+    print(f"Saved bigram_pca_{hp_str}.pdf")
 
     #── Plotly interactive ───────────────────────────────────────────────────
     pfig = go.Figure(data=plotly_pca_traces(projected_means, grid))
 
-    # Individual bigram points — group by current word for legend toggle
     for word in WORDS:
         x_coords = []
         y_coords = []
         prev_words = []
         
-        # Aggregate all matching current words and their previous context across the entire batch
         for b in range(len(sequences)):
             tail = sequences[b][-N_LOOKBACK:]
             idxs = [idx for idx in range(1, len(tail)) if tail[idx] == word]
@@ -175,10 +171,7 @@ def plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs):
             mode="markers",
             marker=dict(
                 size=8, color=WORD_TO_COLOR[word],
-                line=dict(
-                    width=2,
-                    color=[WORD_TO_COLOR[pw] for pw in prev_words],
-                ),
+                line=dict(width=2, color=[WORD_TO_COLOR[pw] for pw in prev_words]),
             ),
             customdata=[[pw] for pw in prev_words],
             hovertemplate=(
@@ -191,10 +184,9 @@ def plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs):
         ))
 
     pfig.update_layout(**plotly_pca_layout(
-        "PCA of individual activations, labeled by bigram"))
+        f"PCA of individual activations, labeled by bigram<br><span style='font-size:12px'>{hp_title}</span>"))
     pfig.update_layout(width=1000, height=1000)
 
-    # Legend annotation
     pfig.add_annotation(
         text=(
             "● Fill = current token<br>"
@@ -207,50 +199,46 @@ def plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs):
         bordercolor="gray", borderwidth=1, borderpad=6,
     )
 
-    save_plotly(pfig, PLOTS_DIR, "bigram_pca.html")
+    save_plotly(pfig, PLOTS_DIR, f"bigram_pca_{hp_str}.html")
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     setup_plotting()
+    plt.rcParams['text.usetex'] = False
     grid = Grid()
 
     # model
     model = load_toy_model() 
-    model.W_pos.data.zero_()
     print(model.cfg)
     print(model)
 
     # generate data
-    seed = 1
+    seed = 42
     set_seed(seed)
     sequences = grid.generate_batch(SEQ_LEN, BATCH_SIZE)
     print(f"{len(sequences)=}")
-    print(f"{sequences=}")
 
-    #activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK) 
-    #get_activations_toy(model, seq, layer=0, n_lookback=2)
     activations_t = get_activations_toy_batch(model, sequences, LAYER, N_LOOKBACK)
-    print(f"Activations shape: {activations_t.shape}")  # Should be [N_SEQUENCES, N_LOOKBACK, D_MODEL]
-    print(f"Activations dtype: {activations_t[0]=}")
     class_means_t = compute_class_means_batch(activations_t, sequences, WORDS, N_LOOKBACK)
-    print(f"Class means shape: {class_means_t.shape=}")  # Should be [16, D_MODEL]
     pca_dirs_t = compute_pca_directions(class_means_t, top_n=2)
-    print(f"PCA directions shape: {pca_dirs_t.shape=}") 
 
     # Conversion
     activations = activations_t.cpu().numpy()
     class_means = class_means_t.cpu().numpy()
     pca_dirs = pca_dirs_t.cpu().numpy()
 
+    # ── Clean Hyperparameter Strings ──────────────────────────────────────────
+    # hp_str is used for safe filenames without spaces
+    hp_str = f"Seq{SEQ_LEN}_Look{N_LOOKBACK}_Batch{BATCH_SIZE}_Seed{seed}"
+    
+    # hp_title is used for the readable plot titles
+    hp_title = f"Seq: {SEQ_LEN} | Lookback: {N_LOOKBACK} | Batch: {BATCH_SIZE} | Seed: {seed}"
+
     # ── Plotting ──────────────────────────────────────────────────────────────
-    plot_class_mean_pca(grid, class_means, pca_dirs, title=seed)
-    # plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs)
-
-    # for seq_idx in range(1):
-    #     plot_attention_heatmaps(model, sequences, LAYER, seq_index=seq_idx, save_path=f"results/random-transformer/plots/attention_heatmaps_{seq_idx}.png")#, WORDS, WORD_TO_COLOR, PLOTS_DIR)
-
-
+    plot_class_mean_pca(grid, class_means, pca_dirs, hp_str=hp_str, hp_title=hp_title)
+    plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs, hp_str=hp_str, hp_title=hp_title)
 
 if __name__ == "__main__":
     main()
