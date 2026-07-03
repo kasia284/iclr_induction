@@ -458,6 +458,7 @@ def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
 
 def main():
     setup_plotting()
+    plt.rcParams['text.usetex'] = False
     grid = Grid()
 
     acc_path = os.path.join(DATA_DIR, "accuracies.npz")
@@ -508,7 +509,7 @@ def main():
     # ── Plotting ──────────────────────────────────────────────────────────────
     # plot_accuracy_curve(all_accs)
     plot_class_mean_pca(grid, class_means, pca_dirs)
-    plot_class_mean_pca_3d(grid, class_means, pca_dirs)
+    # plot_class_mean_pca_3d(grid, class_means, pca_dirs)
 
     plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs)
 

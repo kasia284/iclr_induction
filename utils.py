@@ -11,12 +11,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scienceplots
 import einops
+import math
+
 
 from torch import Tensor
 from jaxtyping import Float
-from transformer_lens import HookedTransformer, utils
+from transformer_lens import HookedTransformer, HookedTransformerConfig, utils
 from transformer_lens.hook_points import HookPoint
 from typing import Tuple
+import plotly.graph_objects as go
+
 
 torch.set_grad_enabled(False)
 
@@ -28,6 +32,60 @@ WORDS = [
     "box", "sand", "sun", "mango",
     "rock", "math", "code", "phone",
 ]
+
+# WORDS = [
+#     "Paris", "London", "Berlin", "Rome",
+#     "Madrid", "Tokyo", "Beijing", "Seoul",
+#     "Cairo", "Lima", "Austin", "Boston",
+#     "Denver", "Miami", "Phoenix", "Chicago",
+# ]
+
+# WORDS = [
+#     "one", "two", "three", "four", 
+#     "five", "six", "seven", "eight", 
+#     "nine", "ten", "eleven", "twelve", 
+#     "thirteen", "fourteen", "fifteen", "sixteen"
+# ]
+
+# WORDS = [
+#     "Paris", "London", "Berlin", "Rome",
+#     "Madrid", "Vienna", "Dublin", "Prague",
+#     "Athens", "Brussels", "Lisbon", "Warsaw",
+#     "Milan", "Munich", "Zurich", "Geneva"
+# ]
+
+# WORDS = [
+#     "Washington", "Jefferson", "Madison", "Jackson",
+#     "Lincoln", "Grant", "Truman", "Kennedy",
+#     "Nixon", "Ford", "Carter", "Reagan",
+#     "Bush", "Clinton", "Obama", "Trump"
+# ]
+
+# WORDS = [
+#     "and", "stone", "run", "yellow",
+#     "carefully", "circle", "heavy", "computer",
+#     "ancient", "stomach", "ocean", "music",
+#     "ghost", "oxygen", "market", "building"
+# ]
+
+
+# WORDS = [
+#     "George", "John", "Thomas", "James",
+#     "Andrew", "Martin", "William", "Franklin",
+#     "Harry", "Richard", "Gerald", "Jimmy",
+#     "Ronald", "Bill", "Donald", "Joe"
+# ]
+
+
+# WORDS = [
+#     # Group 1: Heavy grammar / structural tokens
+#     "the", "and", "of", "to", 
+#     "with", "it", "that", "is",
+    
+#     # Group 2: Ultra-specific concrete nouns
+#     "dinosaur", "galaxy", "concrete", "submarine", 
+#     "microscope", "volcano", "oxygen", "glacier"
+# ]
 
 GRID_ROWS = 4
 GRID_COLS = 4
@@ -167,28 +225,34 @@ def load_model(cache_dir=None, device=None):
         MODEL_NAME, device=device, cache_dir=cache_dir,
     )
 
-from transformer_lens import HookedTransformer, HookedTransformerConfig
 
-def load_toy_model(device=None):
+def load_toy_model(normalization_type=None, seed=42, device=None, n_ctx=None, n_layers=1, zero_out_pos_emb=False):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Define a small 1-layer, 4-head attention-only model
+    if n_ctx is None:
+        n_ctx = SEQ_LEN
+
+    # n_layers-layer, 4-head attention-only causal transformer
     cfg = HookedTransformerConfig(
-        n_layers=1,
+        n_layers=n_layers,
         n_heads=4,
         d_model=128,
         d_head=32,
-        n_ctx=SEQ_LEN,
+        n_ctx=n_ctx,
         d_vocab=len(WORDS),
         act_fn=None,
         attention_dir="causal",
         attn_only=True,
-        # normalization_type=None,
+        normalization_type=normalization_type,
         device=device,
-        seed=42,
+        seed=seed,
     )
-    return HookedTransformer(cfg)
+    model = HookedTransformer(cfg)
+
+    if zero_out_pos_emb:
+        model.W_pos.data.zero_()
+        
+    return model
 
 
 # ── Tokenization ──────────────────────────────────────────────────────────────
@@ -245,26 +309,24 @@ def get_activations(model, sequence, layer, n_lookback, fwd_hooks=[]):
     return acts[-n_lookback:, :]  # [n_lookback, d_model]
 
 
-import torch
-from transformer_lens import utils
 
-def get_activations_toy_batch(model, sequences, layer, n_lookback, act_type="attn_out"):
+def get_activations_toy_batch(model, sequences, layer, n_lookback, act_type="attn_out", fwd_hooks=[]):
     """
     Returns the last n_lookback activations for a BATCH of sequences.
     Output shape: [batch_size, n_lookback, d_model]
     """
     word_to_id = {word: i for i, word in enumerate(WORDS)}
-    
+
     # Map all sequences in the batch to token IDs
     token_ids = [[word_to_id[word] for word in seq] for seq in sequences]
     tokens = torch.tensor(token_ids, dtype=torch.long).to(model.cfg.device)
-    
+
     # Define the hook point
-    from transformer_lens import utils
     hook_name = utils.get_act_name(act_type, layer)
-    
+
     # Run with cache
-    _, cache = model.run_with_cache(tokens, names_filter=[hook_name])
+    with model.hooks(fwd_hooks=fwd_hooks):
+        _, cache = model.run_with_cache(tokens, names_filter=[hook_name])
     acts = cache[hook_name] # Shape: [batch_size, seq_len, d_model]
     
     # Return the last n_lookback positions for ALL sequences in the batch
@@ -348,6 +410,18 @@ def compute_pca_directions(
     return pca_dirs, explained_variance_ratio
 
 
+def set_square_limits(ax, xs, ys, pad_frac=0.15):
+    """Force equal-width x/y limits (centered on the data) so that, combined
+    with ax.set_aspect('equal'), every subplot renders at the same physical
+    size regardless of how spread out its own data happens to be."""
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    x_center, y_center = (x_min + x_max) / 2, (y_min + y_max) / 2
+    half_span = max(x_max - x_min, y_max - y_min, 1e-6) / 2 * (1 + pad_frac)
+    ax.set_xlim(x_center - half_span, x_center + half_span)
+    ax.set_ylim(y_center - half_span, y_center + half_span)
+
+
 # ── Ablation hooks ─────────────────────────────────────────────────────────────
 
 def head_ablation_hook(
@@ -394,7 +468,7 @@ def save_figure(fig, directory, filename):
     os.makedirs(directory, exist_ok=True)
     stem = os.path.splitext(filename)[0]
     fig.tight_layout()
-    fig.savefig(os.path.join(directory, stem + ".pdf"))
+    # fig.savefig(os.path.join(directory, stem + ".pdf"))
     fig.savefig(os.path.join(directory, stem + ".png"), dpi=300)
     plt.close(fig)
 
@@ -453,7 +527,6 @@ def save_plotly(fig, directory, filename):
 
 def plotly_pca_traces(projected, grid, words=WORDS, word_to_color=WORD_TO_COLOR):
     """Return list of plotly traces for a PCA scatter: edges + star centroids."""
-    import plotly.graph_objects as go
     traces = []
     A = grid.build_adjacency_matrix()
     # Collect all edges into a single trace with None breaks
@@ -482,7 +555,6 @@ def plotly_pca_traces(projected, grid, words=WORDS, word_to_color=WORD_TO_COLOR)
         ))
     return traces
 
-import math
 
 
 def plot_attention_heatmaps(model, sequences, layer: int = 0, seq_index: int = 0,

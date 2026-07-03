@@ -16,7 +16,7 @@ from utils import (
 
 LAYER = 0
 SEQ_LEN = 64
-PLOTS_DIR = "results/random-transformer/plots/LN"
+PLOTS_DIR = "results/cosine-similarity"
 N_LOOKBACK = 50
 BATCH_SIZE = 64
 
@@ -238,7 +238,7 @@ def main():
 
     # ── Plotting ──────────────────────────────────────────────────────────────
     plot_class_mean_pca(grid, class_means, pca_dirs, hp_str=hp_str, hp_title=hp_title)
-    plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs, hp_str=hp_str, hp_title=hp_title)
+    # plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs, hp_str=hp_str, hp_title=hp_title)
 
 if __name__ == "__main__":
     main()
