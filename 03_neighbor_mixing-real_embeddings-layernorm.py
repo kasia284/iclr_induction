@@ -4,15 +4,22 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+import plotly.graph_objects as go
 
 from utils import (
-    WORDS, LAYER, SEQ_LEN, WORD_TO_COLOR, MODEL_NAME,
-    Grid, set_seed, load_model, get_activations, load_toy_model,
-    compute_pca_directions, setup_plotting, save_figure,
+    LAYER, SEQ_LEN, MODEL_NAME,
+    Torus, set_seed, load_model, get_activations, load_toy_model,
+    compute_pca_directions, setup_plotting, save_figure, set_square_limits,
+    build_word_to_color,
     smooth, plotly_pca_layout, plotly_line_layout, plotly_pca_traces, save_plotly,
 )
+from word_lists import WORD_LISTS
 
-PLOTS_DIR = "results/neighbor-mixing/random-embs/"
+WORD_LIST_KEY = "grid_36"
+WORDS = WORD_LISTS[WORD_LIST_KEY]
+WORD_TO_COLOR = build_word_to_color(WORDS)
+GRID_ROWS, GRID_COLS = 6, 6
+PLOTS_DIR = f"results/neighbor-mixing/{WORD_LIST_KEY}/"
 N_LOOKBACK = 50
 
 
@@ -110,6 +117,7 @@ def plot_class_mean_pca(
         ax.set_zlabel(lbl_pc3)
         ax.set_box_aspect((1, 1, 1))
     else:
+        set_square_limits(ax, projected[:, 0], projected[:, 1])
         ax.set_aspect("equal")
         
     ax.set_title(f"{'3D ' if is_3d else ''}{title}", fontsize=10)
@@ -284,12 +292,101 @@ def layer_norm_normalized(tensor, eps=1e-6):
     return centered / (norm + eps)
 
 
+def plot_gram_matrix_on_ax(ax, fig, embs):
+    """Raw inner-product (Gram) matrix of the given embeddings -- unlike
+    cosine similarity, this keeps the effect of magnitude, not just direction."""
+    gram_matrix = (embs @ embs.T).numpy()
+    vmax = np.abs(gram_matrix).max()
+    im = ax.imshow(gram_matrix, cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+    ax.set_xticks(range(len(WORDS)))
+    ax.set_yticks(range(len(WORDS)))
+    ax.set_xticklabels(WORDS, rotation=45, ha="right", fontsize=7)
+    ax.set_yticklabels(WORDS, fontsize=7)
+    ax.set_title("Gram Matrix", fontsize=10)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Inner Product")
+
+
+def save_pca_round_plotly_3d(grid, class_means, pca_dirs, round_num, norm_label, embs_type, suffix=""):
+    """Interactive, rotatable 3D PCA scatter for a single mixing round."""
+    projected = class_means @ pca_dirs.T  # [n_words, 3]
+
+    A = grid.build_adjacency_matrix()
+    edge_x, edge_y, edge_z = [], [], []
+    for i in range(len(WORDS)):
+        for j in range(i + 1, len(WORDS)):
+            if A[i, j]:
+                edge_x += [projected[i, 0].item(), projected[j, 0].item(), None]
+                edge_y += [projected[i, 1].item(), projected[j, 1].item(), None]
+                edge_z += [projected[i, 2].item(), projected[j, 2].item(), None]
+
+    # Grey face for each grid cell (two triangles per quad).
+    word_to_idx = {w: i for i, w in enumerate(WORDS)}
+    is_torus = type(grid).__name__ == "Torus"
+    r_range = range(grid.rows) if is_torus else range(grid.rows - 1)
+    c_range = range(grid.cols) if is_torus else range(grid.cols - 1)
+    tri_i, tri_j, tri_k = [], [], []
+    for r in r_range:
+        for c in c_range:
+            r2, c2 = (r + 1) % grid.rows, (c + 1) % grid.cols
+            corners = [grid.grid[r][c], grid.grid[r][c2], grid.grid[r2][c2], grid.grid[r2][c]]
+            idxs = [word_to_idx[w] for w in corners]
+            tri_i += [idxs[0], idxs[0]]
+            tri_j += [idxs[1], idxs[2]]
+            tri_k += [idxs[2], idxs[3]]
+
+    traces = [go.Mesh3d(
+        x=projected[:, 0].tolist(), y=projected[:, 1].tolist(), z=projected[:, 2].tolist(),
+        i=tri_i, j=tri_j, k=tri_k,
+        color="grey", opacity=0.4, flatshading=True,
+        hoverinfo="skip", showlegend=False,
+    )]
+
+    traces.append(go.Scatter3d(
+        x=edge_x, y=edge_y, z=edge_z, mode="lines",
+        line=dict(color="gray", width=2), opacity=0.4,
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    for i, word in enumerate(WORDS):
+        traces.append(go.Scatter3d(
+            x=[projected[i, 0].item()], y=[projected[i, 1].item()], z=[projected[i, 2].item()],
+            mode="markers+text",
+            marker=dict(size=8, symbol="diamond", color=WORD_TO_COLOR[word],
+                        line=dict(width=1, color="black")),
+            text=word, textposition="top center", textfont=dict(size=10),
+            hovertemplate=f"<b>{word}</b><extra></extra>",
+            showlegend=False,
+        ))
+
+    round_desc = "0 rounds mixing" if round_num == 0 else f"after {round_num} round(s) of {norm_label} mixing"
+    pfig = go.Figure(data=traces)
+    pfig.update_layout(
+        title=f"PCA of {embs_type} embeddings -- {round_desc}",
+        scene=dict(xaxis_title="PC1", yaxis_title="PC2", zaxis_title="PC3", aspectmode="cube"),
+        margin=dict(l=0, r=0, b=0, t=40),
+        width=700, height=700,
+    )
+
+    out_name = f"pca_round_{round_num}_{embs_type}_embs{suffix}_3d"
+    save_plotly(pfig, PLOTS_DIR, f"{out_name}.html")
+
+
 def plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, top_n):
-    """One figure with a class-mean PCA panel per mixing round, projected
-    onto the top `top_n` (2 or 3) principal components."""
+    """One figure: the Gram matrix of the (round-0) embeddings on the left,
+    followed by a class-mean PCA panel per mixing round, projected onto the
+    top `top_n` (2 or 3) principal components.
+
+    For the 3D case, also saves each round as its own interactive, rotatable
+    Plotly HTML (the static matplotlib panels can't be rotated)."""
     is_3d = (top_n == 3)
-    subplot_kw = {"projection": "3d"} if is_3d else {}
-    fig, axes = plt.subplots(1, len(rounds), figsize=(4 * len(rounds), 4), subplot_kw=subplot_kw)
+    n_panels = 1 + len(rounds)
+    fig = plt.figure(figsize=(4 * n_panels, 4))
+
+    ax_gram = fig.add_subplot(1, n_panels, 1)
+    plot_gram_matrix_on_ax(ax_gram, fig, embs_by_round[0])
+
+    pca_subplot_kw = {"projection": "3d"} if is_3d else {}
+    axes = [fig.add_subplot(1, n_panels, i + 2, **pca_subplot_kw) for i in range(len(rounds))]
 
     for ax, r in zip(axes, rounds):
         embs_r = embs_by_round[r].numpy()
@@ -302,10 +399,16 @@ def plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, t
             grid, embs_r, pca_dirs_r.numpy(), explained_variance=var_r,
             title=round_desc, ax=ax,
         )
+        if is_3d:
+            save_pca_round_plotly_3d(
+                grid, embs_r, pca_dirs_r.numpy(), r, norm_label, embs_type,
+                suffix=f"_{WORD_LIST_KEY}_{norm_label}",
+            )
 
     dim_suffix = "3d" if is_3d else "2d"
-    fig.suptitle(f"{'3D ' if is_3d else ''}PCA of Learned Embeddings across neighbor-mixing rounds ({norm_label})")
-    out_name = f"{embs_type}_embs_mixing_rounds_{norm_label}_{dim_suffix}"
+    embs_label = "Learned" if embs_type == "learned" else "Random"
+    fig.suptitle(f"{'3D ' if is_3d else ''}Gram Matrix and PCA of {embs_label} Embeddings across neighbor-mixing rounds ({norm_label})")
+    out_name = f"{embs_type}_embs_gram_and_mixing_rounds_{WORD_LIST_KEY}_{norm_label}_{dim_suffix}"
     save_figure(fig, PLOTS_DIR, f"{out_name}.pdf")
     print(f"Saved {out_name}")
 
@@ -320,25 +423,35 @@ def main():
     set_seed(42)
 
     normalization_type = None  # None or "PreLN" or "PostLN" or "RMSNorm" or "PreLNNormalized"
-    embs_type = "random"  # "random" or "learned"
+    embs_type = "learned"  # "random" or "learned"
     d_embed = 128
 
 
-    grid = Grid()
+    grid = Torus(words=WORDS, rows=GRID_ROWS, cols=GRID_COLS)
     adjacency_matrix = torch.tensor(grid.build_adjacency_matrix(), dtype=torch.float32)
     degree_matrix = adjacency_matrix.sum(dim=1, keepdim=True)
     
-    # model = load_model()
+    
+    model = load_model()
     # normalization_type is our own label consumed by apply_norm() below, not
     # a valid HookedTransformerConfig setting, so the model itself is loaded
     # without normalization (its internal LN is never exercised: we only use
     # it to fetch W_E and to_single_token, and do the norm math by hand).
-    model = load_toy_model(normalization_type=None, seed=42, n_ctx=SEQ_LEN, n_layers=1, zero_out_pos_emb=True)
+    # model = load_toy_model(normalization_type=None, seed=42, n_ctx=SEQ_LEN, n_layers=1, zero_out_pos_emb=True)
 
     if embs_type == "learned":
         # raw token embeddings (just after the embedding lookup, before any norm).
-        # The toy model has no tokenizer; its vocab is WORDS in list order.
-        token_ids = [WORDS.index(word) for word in WORDS]
+        # Each word must tokenize to a single token so its embedding row is
+        # unambiguous. Try with a leading space first (how it appears mid-sequence,
+        # e.g. " Paris"), falling back to the bare word (e.g. "11", which tokenizes
+        # differently than " 11") if that's not a single token.
+        token_ids = []
+        for word in WORDS:
+            try:
+                token_ids.append(model.to_single_token(f" {word}"))
+            except AssertionError:
+                token_ids.append(model.to_single_token(word))
+
         token_ids_tensor = torch.tensor(token_ids, dtype=torch.long, device=model.cfg.device)
 
         embeddings = model.W_E[token_ids_tensor].detach().float().cpu()
@@ -372,10 +485,10 @@ def main():
             embs_by_round[r] = embs_curr_t
 
     norm_label = normalization_type.lower() if normalization_type else "none"
-    rounds = [0, 1, 2, 3, 4, 10]
+    rounds = [0, 1, 2, 3]
 
     plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, top_n=2)
-    # plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, top_n=3)
+    plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, top_n=3)
 
 
 

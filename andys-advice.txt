@@ -1,0 +1,4 @@
+- Check gain
+- Sometimes transformerlens does something called "layernorm folding", where it folds the layer normalization into the weights of the model.
+  - See https://github.com/godfreyjason/TransformerLens/blob/main/further_comments.md#weight-processing
+  - 

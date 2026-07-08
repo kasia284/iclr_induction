@@ -6,6 +6,7 @@ import random
 import functools
 
 from matplotlib.colors import LogNorm
+import matplotlib.colors as mcolors
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -26,12 +27,12 @@ torch.set_grad_enabled(False)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-WORDS = [
-    "apple", "bird", "car", "egg",
-    "house", "milk", "plane", "opera",
-    "box", "sand", "sun", "mango",
-    "rock", "math", "code", "phone",
-]
+# WORDS = [
+#     "apple", "bird", "car", "egg",
+#     "house", "milk", "plane", "opera",
+#     "box", "sand", "sun", "mango",
+#     "rock", "math", "code", "phone",
+# ]
 
 # WORDS = [
 #     "Paris", "London", "Berlin", "Rome",
@@ -40,12 +41,12 @@ WORDS = [
 #     "Denver", "Miami", "Phoenix", "Chicago",
 # ]
 
-# WORDS = [
-#     "one", "two", "three", "four", 
-#     "five", "six", "seven", "eight", 
-#     "nine", "ten", "eleven", "twelve", 
-#     "thirteen", "fourteen", "fifteen", "sixteen"
-# ]
+WORDS = [
+    "one", "two", "three", "four", 
+    "five", "six", "seven", "eight", 
+    "nine", "ten", "eleven", "twelve", 
+    "thirteen", "fourteen", "fifteen", "sixteen"
+]
 
 # WORDS = [
 #     "Paris", "London", "Berlin", "Rome",
@@ -102,7 +103,20 @@ COLORS = [
     "#e78ac3", "#a6d854", "#ffd92f", "#e5c494",
 ]
 
-WORD_TO_COLOR = {word: color for word, color in zip(WORDS, COLORS)}
+def build_word_to_color(words):
+    """Map words to colors by grid position, so e.g. position 0 is always
+    the same color regardless of which WORD_LISTS vocabulary is in use.
+
+    Falls back to a generated colormap when there are more words than the
+    fixed 16-color palette covers (e.g. an 8x8 grid)."""
+    if len(words) <= len(COLORS):
+        return {word: color for word, color in zip(words, COLORS)}
+    cmap = plt.get_cmap("hsv", len(words))
+    colors = [mcolors.to_hex(cmap(i)) for i in range(len(words))]
+    return {word: color for word, color in zip(words, colors)}
+
+
+WORD_TO_COLOR = build_word_to_color(WORDS)
 
 
 # ── Grid ───────────────────────────────────────────────────────────────────────
@@ -194,6 +208,92 @@ class Grid:
         if col > 0:              moves.append("left")
         if col < self.cols - 1:  moves.append("right")
         return moves
+
+
+# ── Torus ──────────────────────────────────────────────────────────────────────
+
+class Torus:
+    """Same word grid as Grid, but with periodic boundary conditions: moving
+    off one edge wraps around to the opposite edge, so every cell has all
+    four neighbors."""
+
+    def __init__(self, words=WORDS, rows=GRID_ROWS, cols=GRID_COLS):
+        if rows * cols != len(words):
+            raise ValueError(
+                f"Grid dimensions ({rows}x{cols}={rows * cols}) "
+                f"do not match number of words ({len(words)})"
+            )
+        self.words = words
+        self.rows = rows
+        self.cols = cols
+        self.grid = np.array(words).reshape(rows, cols).tolist()
+        self.word_to_row = {w: i // cols for i, w in enumerate(words)}
+        self.word_to_col = {w: i % cols for i, w in enumerate(words)}
+
+    # ── sequence generation ────────────────────────────────────────────────
+
+    def generate_sequence(self, seq_len, start_word=None):
+        """Random walk on the torus.  Optionally fix the starting word."""
+        if start_word is not None:
+            row, col = self.word_to_row[start_word], self.word_to_col[start_word]
+        else:
+            row, col = np.random.randint(0, self.rows), np.random.randint(0, self.cols)
+
+        sequence = [self.grid[row][col]]
+        while len(sequence) < seq_len:
+            moves = self._valid_moves(row, col)
+            direction = np.random.choice(moves)
+            if direction == "up":    row = (row - 1) % self.rows
+            elif direction == "down":  row = (row + 1) % self.rows
+            elif direction == "left":  col = (col - 1) % self.cols
+            elif direction == "right": col = (col + 1) % self.cols
+            sequence.append(self.grid[row][col])
+        return sequence
+
+    def generate_batch(self, seq_len, n_sequences):
+        """
+        Generate a batch of random-walk sequences.
+
+        Start words are assigned cyclically so that all grid words
+        appear approximately equally often as starting points.
+        """
+        sequences = []
+
+        for i in range(n_sequences):
+            start_word = self.words[i % len(self.words)]
+            sequences.append(
+                self.generate_sequence(seq_len, start_word=start_word)
+            )
+
+        return sequences
+
+    # ── adjacency ──────────────────────────────────────────────────────────
+
+    def get_valid_next_words(self, word):
+        row, col = self.word_to_row[word], self.word_to_col[word]
+        next_words = []
+        for move in self._valid_moves(row, col):
+            if move == "up":    next_words.append(self.grid[(row - 1) % self.rows][col])
+            elif move == "down":  next_words.append(self.grid[(row + 1) % self.rows][col])
+            elif move == "left":  next_words.append(self.grid[row][(col - 1) % self.cols])
+            elif move == "right": next_words.append(self.grid[row][(col + 1) % self.cols])
+        return next_words
+
+    def build_adjacency_matrix(self):
+        """Return a 16x16 binary adjacency matrix (symmetric)."""
+        n = len(self.words)
+        A = np.zeros((n, n))
+        for i, word in enumerate(self.words):
+            for neighbor in self.get_valid_next_words(word):
+                j = self.words.index(neighbor)
+                A[i, j] = 1
+        return A
+
+    # ── internals ──────────────────────────────────────────────────────────
+
+    def _valid_moves(self, row, col):
+        # Every cell has all four neighbors under periodic boundary conditions.
+        return ["up", "down", "left", "right"]
 
 
 # ── Seeding ────────────────────────────────────────────────────────────────────

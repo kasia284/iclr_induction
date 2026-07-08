@@ -1,44 +1,48 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-import plotly.graph_objects as go
-import tqdm
 import torch
 
-from utils import (
-    WORDS, LAYER, SEQ_LEN, WORD_TO_COLOR,
-    Grid, set_seed, load_model, get_model_accuracies, get_activations,
-    compute_class_means, compute_pca_directions, setup_plotting, save_figure,
-    smooth, plotly_pca_layout, plotly_line_layout, plotly_pca_traces, save_plotly,
-    get_activations_toy_batch,
-)
+from utils import load_model, setup_plotting, save_figure
+from word_lists import WORD_LISTS
 
 from sklearn.metrics.pairwise import cosine_similarity
 
-DATA_DIR = "results/cosine-similarity"
-PLOTS_DIR = "results/cosine-similarity"
+WORD_LIST_KEY = "judging_nearest_neighbors" #
+WORDS = WORD_LISTS[WORD_LIST_KEY]
+
+DATA_DIR = "results/gram-matrix"
+PLOTS_DIR = "results/gram-matrix"
 
 
-def plot_cosine_similarity(cos_sim_matrix, title=None):
-    """
-    Plots the pairwise cosine similarity matrix using Matplotlib.
-    """
-    fig, ax = plt.subplots(figsize=(6.5, 5.5))
-    
-    cax = ax.imshow(cos_sim_matrix, cmap="RdBu_r", vmin=-1.0, vmax=1.0)
-    
-    cbar = fig.colorbar(cax, ax=ax)
-    cbar.set_label("Cosine Similarity", rotation=270, labelpad=15)
-    
+def _label_heatmap_ax(ax):
     ax.set_xticks(range(len(WORDS)))
     ax.set_yticks(range(len(WORDS)))
     ax.set_xticklabels(WORDS, rotation=45, ha="right", fontsize=8)
     ax.set_yticklabels(WORDS, fontsize=8)
-    
-    ax.set_title("Pairwise Cosine Similarity of Static Embeddings", fontsize=10, pad=12)
-    
+
+
+def plot_cosine_similarity(cos_sim_matrix, gram_matrix, title=None):
+    """
+    Plots the pairwise cosine similarity matrix and the raw Gram (inner
+    product) matrix side by side. Cosine similarity only captures direction;
+    the Gram matrix also preserves embedding magnitude.
+    """
+    fig, (ax_cos, ax_gram) = plt.subplots(1, 2, figsize=(13, 5.5))
+
+    cax = ax_cos.imshow(cos_sim_matrix, cmap="RdBu_r", vmin=-1.0, vmax=1.0)
+    fig.colorbar(cax, ax=ax_cos, fraction=0.046, pad=0.04, label="Cosine Similarity")
+    _label_heatmap_ax(ax_cos)
+    ax_cos.set_title("Cosine Similarity", fontsize=10, pad=12)
+
+    vmax = np.abs(gram_matrix).max()
+    gax = ax_gram.imshow(gram_matrix, cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+    fig.colorbar(gax, ax=ax_gram, fraction=0.046, pad=0.04, label="Inner Product")
+    _label_heatmap_ax(ax_gram)
+    ax_gram.set_title("Gram Matrix", fontsize=10, pad=12)
+
+    fig.suptitle(f"Pairwise Similarity of Static Embeddings ({title})", fontsize=12)
     plt.tight_layout()
-    
+
     save_figure(fig, PLOTS_DIR, f"embeddings_cosine_similarity_{title}.png")
     print(f"Saved embeddings_cosine_similarity_{title}.png")
 
@@ -62,13 +66,13 @@ def main():
             
             try:
                 # model.to_single_token strictly enforces that the string maps to EXACTLY ONE token ID.
-                # If it splits into multiple subwords, it raises a ValueError.
+                # If it splits into multiple subwords, it raises an AssertionError.
                 tid = model.to_single_token(word_with_space)
-            except ValueError:
+            except AssertionError:
                 # Fallback: check if the word fits as a single token without a leading space
                 try:
                     tid = model.to_single_token(word)
-                except ValueError:
+                except AssertionError:
                     raise ValueError(f"The word '{word}' cannot be represented as a single token in this model's vocabulary!")
             
             token_ids.append(tid)
@@ -82,11 +86,12 @@ def main():
         static_embeddings = model.W_E[token_ids_tensor].detach().cpu().numpy()
         print(f"Retrieved embedding matrix directly from W_E. Shape: {static_embeddings.shape}")
         
-        # Compute pairwise cosine similarity matrix
+        # Compute pairwise cosine similarity and raw Gram (inner product) matrices
         cos_sim_matrix = cosine_similarity(static_embeddings)
-        
-        # Plot and save the heatmap
-        plot_cosine_similarity(cos_sim_matrix, title="vocab_lookup")
+        gram_matrix = static_embeddings @ static_embeddings.T
+
+        # Plot and save the heatmaps
+        plot_cosine_similarity(cos_sim_matrix, gram_matrix, title=WORD_LIST_KEY)
 
     except ValueError as val_err:
         print(f"\n[Vocabulary Error]: {val_err}")
