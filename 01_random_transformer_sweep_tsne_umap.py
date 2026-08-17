@@ -46,7 +46,7 @@ def draw_class_mean_on_ax(ax, grid, means_2d, title=""):
                 ax.plot(
                     [means_2d[i, 0], means_2d[j, 0]],
                     [means_2d[i, 1], means_2d[j, 1]],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for i, word in enumerate(WORDS):
@@ -81,7 +81,7 @@ def draw_bigram_on_ax(ax, grid, sequences, individual_2d, means_2d, title=""):
                 ax.plot(
                     [means_2d[i, 0], means_2d[j, 0]],
                     [means_2d[i, 1], means_2d[j, 1]],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     # Individual sequence tokens

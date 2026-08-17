@@ -93,7 +93,7 @@ def plot_accuracy_curve(all_accs):
 
 
 def plot_class_mean_pca(grid, class_means, pca_dirs):
-    projected = class_means @ pca_dirs.T
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(5, 5))
     A = grid.build_adjacency_matrix()
@@ -103,7 +103,7 @@ def plot_class_mean_pca(grid, class_means, pca_dirs):
                 ax.plot(
                     [projected[i, 0].item(), projected[j, 0].item()],
                     [projected[i, 1].item(), projected[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for i, word in enumerate(WORDS):
@@ -130,7 +130,7 @@ def _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid, label=T
                 ax.plot(
                     [projected_means[i, 0].item(), projected_means[j, 0].item()],
                     [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     # Establish clean paths for true geometric half-circles
@@ -180,8 +180,9 @@ def _make_bigram_legend(ax):
 
 def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
     tail = sequence[-N_LOOKBACK:]
-    projected_all = activations @ pca_dirs.T
-    projected_means = class_means @ pca_dirs.T
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(8, 8))
     _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid)
@@ -311,7 +312,7 @@ def main():
         sequence = grid.generate_sequence(SEQ_LEN)
         activations_t = get_activations(model, sequence, TOY_LAYER, N_LOOKBACK)
         class_means_t = compute_class_means(activations_t, sequence, WORDS, N_LOOKBACK)
-        pca_dirs_t = compute_pca_directions(class_means_t, top_n=2)
+        pca_dirs_t, _ = compute_pca_directions(class_means_t, top_n=2)
 
         activations = activations_t.cpu().numpy()
         class_means = class_means_t.cpu().numpy()
@@ -386,11 +387,11 @@ def main():
             class_means_t = torch.stack(class_means_list)
             
             # 3. Calculate PCA directions & project down to 2D
-            pca_dirs_t = compute_pca_directions(class_means_t, top_n=2)
-            
+            pca_dirs_t, _ = compute_pca_directions(class_means_t, top_n=2)
+
             class_means = class_means_t.cpu().numpy()
             pca_dirs = pca_dirs_t.cpu().numpy()
-            projected = class_means @ pca_dirs.T
+            projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
             
             # 4. Generate the Visualization Layout
             fig, ax = plt.subplots(figsize=(5, 5))
@@ -403,7 +404,7 @@ def main():
                         ax.plot(
                             [projected[i, 0].item(), projected[j, 0].item()],
                             [projected[i, 1].item(), projected[j, 1].item()],
-                            color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                            color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                         )
             
             # Draw representation node centroids

@@ -38,7 +38,7 @@ def plot_pca_scatter(projected, grid, title, filename):
                 ax.plot(
                     [projected[i, 0].item(), projected[j, 0].item()],
                     [projected[i, 1].item(), projected[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for i, word in enumerate(WORDS):

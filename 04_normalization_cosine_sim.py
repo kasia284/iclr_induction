@@ -60,7 +60,7 @@ def plot_pca_on_ax(ax, grid, projected, explained_var, title):
                 ax.plot(
                     [projected[i, 0], projected[j, 0]],
                     [projected[i, 1], projected[j, 1]],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for i, word in enumerate(WORDS):
@@ -113,7 +113,8 @@ def main():
         plot_gram_matrix_on_ax(ax_gram, fig_gram, gram_matrix, title=f"Normalization: {label}")
 
         pca_dirs_t, explained_var = compute_pca_directions(embeddings_t, top_n=2)
-        projected = (embeddings_t @ pca_dirs_t.T).detach().cpu().numpy()
+        centered_embeddings_t = embeddings_t - embeddings_t.mean(dim=0, keepdim=True)
+        projected = (centered_embeddings_t @ pca_dirs_t.T).detach().cpu().numpy()
         plot_pca_on_ax(ax_pca, grid, projected, explained_var, title=f"Normalization: {label}")
 
     save_figure(fig_gram, PLOTS_DIR, "embeddings_gram_matrix_normalization_comparison.png")

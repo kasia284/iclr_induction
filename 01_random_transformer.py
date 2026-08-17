@@ -28,7 +28,7 @@ WORDS = WORD_LISTS["text_numbers"]
 def plot_class_mean_pca(graph, class_means, pca_dirs, explained_var, hp_str="", hp_title=""):
     """Scatter of class-mean centroids with grid edges and explained variance.
     Supports 2D and 3D, depending on how many PCA directions are passed in."""
-    projected = class_means @ pca_dirs.T
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
     is_3d = (projected.shape[1] == 3)
 
     if is_3d:
@@ -47,13 +47,13 @@ def plot_class_mean_pca(graph, class_means, pca_dirs, explained_var, hp_str="", 
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
                         [projected[i, 2].item(), projected[j, 2].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
                 else:
                     ax.plot(
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
 
     # Scatter + labels
@@ -122,13 +122,13 @@ def _draw_bigram_scatter(ax, projected_all, projected_means, tail, graph, label=
                         [projected_means[i, 0].item(), projected_means[j, 0].item()],
                         [projected_means[i, 1].item(), projected_means[j, 1].item()],
                         [projected_means[i, 2].item(), projected_means[j, 2].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
                 else:
                     ax.plot(
                         [projected_means[i, 0].item(), projected_means[j, 0].item()],
                         [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
 
     for idx in range(1, len(tail)):
@@ -197,8 +197,9 @@ def plot_bigram_pca(graph, sequences, activations, class_means, pca_dirs, explai
     """Individual activations colored by (current token, previous token) for a
     batch of sequences. Supports 2D and 3D, depending on how many PCA
     directions are passed in."""
-    projected_all = activations @ pca_dirs.T
-    projected_means = class_means @ pca_dirs.T
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T
     is_3d = (projected_means.shape[1] == 3)
 
     # ── Main bigram plot (Matplotlib) ────────────────────────────────────────

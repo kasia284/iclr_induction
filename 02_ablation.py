@@ -224,8 +224,9 @@ def compute_pca_projected(model, grid, sequence, heads_to_ablate):
     hooks = make_ablation_hooks(heads_to_ablate) if heads_to_ablate else []
     activations = get_activations(model, sequence, LAYER, N_LOOKBACK, fwd_hooks=hooks)
     class_means = compute_class_means(activations, sequence, WORDS, N_LOOKBACK)
-    pca_dirs = compute_pca_directions(class_means, top_n=2)
-    projected = (class_means @ pca_dirs.T).cpu().numpy()
+    pca_dirs, _ = compute_pca_directions(class_means, top_n=2)
+    centered = class_means - class_means.mean(dim=0, keepdim=True)
+    projected = (centered @ pca_dirs.T).cpu().numpy()
     return projected
 
 
@@ -241,7 +242,7 @@ def plot_ablation_pca(grid, projected, condition_name, filename):
                 ax.plot(
                     [projected[i, 0].item(), projected[j, 0].item()],
                     [projected[i, 1].item(), projected[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for i, word in enumerate(WORDS):

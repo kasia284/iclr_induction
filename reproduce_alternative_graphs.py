@@ -154,7 +154,7 @@ def plot_accuracy_curve(all_accs, graph_name):
 
 
 def plot_class_mean_pca(graph, class_means, pca_dirs, graph_name):
-    projected = class_means @ pca_dirs.T
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(5, 5))
     A = graph.build_adjacency_matrix()
@@ -164,7 +164,7 @@ def plot_class_mean_pca(graph, class_means, pca_dirs, graph_name):
                 ax.plot(
                     [projected[i, 0].item(), projected[j, 0].item()],
                     [projected[i, 1].item(), projected[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for i, word in enumerate(WORDS):
@@ -191,7 +191,7 @@ def _draw_bigram_scatter(ax, projected_all, projected_means, tail, graph, label=
                 ax.plot(
                     [projected_means[i, 0].item(), projected_means[j, 0].item()],
                     [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     # Geometry paths for split half-circle markers
@@ -241,8 +241,9 @@ def _make_bigram_legend(ax):
 
 def plot_bigram_pca(graph, sequence, activations, class_means, pca_dirs, graph_name):
     tail = sequence[-N_LOOKBACK:]
-    projected_all = activations @ pca_dirs.T
-    projected_means = class_means @ pca_dirs.T
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(8, 8))
     _draw_bigram_scatter(ax, projected_all, projected_means, tail, graph)
@@ -308,7 +309,7 @@ def run_experiment_pipeline(graph, graph_name, model):
         sequence = graph.generate_sequence(SEQ_LEN)
         activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK)
         class_means_t = compute_class_means(activations_t, sequence, WORDS, N_LOOKBACK)
-        pca_dirs_t = compute_pca_directions(class_means_t, top_n=2)
+        pca_dirs_t, _ = compute_pca_directions(class_means_t, top_n=2)
 
         activations = activations_t.cpu().numpy()
         class_means = class_means_t.cpu().numpy()

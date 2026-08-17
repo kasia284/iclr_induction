@@ -27,7 +27,7 @@ print(f"{SEQ_LEN=}, {N_LOOKBACK=}")
 
 def plot_class_mean_pca(grid, class_means, pca_dirs, hp_str="", hp_title=""):
     """Scatter of class-mean centroids with grid edges."""
-    projected = class_means @ pca_dirs.T 
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(5, 5))
 
@@ -39,7 +39,7 @@ def plot_class_mean_pca(grid, class_means, pca_dirs, hp_str="", hp_title=""):
                 ax.plot(
                     [projected[i, 0].item(), projected[j, 0].item()],
                     [projected[i, 1].item(), projected[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     # Scatter + labels
@@ -81,7 +81,7 @@ def _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid, label=T
                 ax.plot(
                     [projected_means[i, 0].item(), projected_means[j, 0].item()],
                     [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for idx in range(1, len(tail)):
@@ -127,8 +127,9 @@ def _make_bigram_legend(ax):
 
 def plot_bigram_pca(grid, sequences, activations, class_means, pca_dirs, hp_str="", hp_title=""):
     """Individual activations colored by (current token, previous token) for a batch of sequences."""
-    projected_all = activations @ pca_dirs.T        
-    projected_means = class_means @ pca_dirs.T      
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T
 
     # ── Main bigram plot (Matplotlib) ────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 8))
@@ -222,7 +223,7 @@ def main():
 
     activations_t = get_activations_toy_batch(model, sequences, LAYER, N_LOOKBACK)
     class_means_t = compute_class_means_batch(activations_t, sequences, WORDS, N_LOOKBACK)
-    pca_dirs_t = compute_pca_directions(class_means_t, top_n=2)
+    pca_dirs_t, _ = compute_pca_directions(class_means_t, top_n=2)
 
     # Conversion
     activations = activations_t.cpu().numpy()

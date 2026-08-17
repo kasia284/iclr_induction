@@ -1,4 +1,5 @@
 import os
+import math
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -8,18 +9,30 @@ import plotly.graph_objects as go
 
 from utils import (
     LAYER, SEQ_LEN, MODEL_NAME,
-    Torus, set_seed, load_model, get_activations, load_toy_model,
+    Grid, Torus, set_seed, load_model, get_activations, load_toy_model,
     compute_pca_directions, setup_plotting, save_figure, set_square_limits,
     build_word_to_color,
     smooth, plotly_pca_layout, plotly_line_layout, plotly_pca_traces, save_plotly,
 )
 from word_lists import WORD_LISTS
 
-WORD_LIST_KEY = "grid_36"
-WORDS = WORD_LISTS[WORD_LIST_KEY]
-WORD_TO_COLOR = build_word_to_color(WORDS)
-GRID_ROWS, GRID_COLS = 6, 6
-PLOTS_DIR = f"results/neighbor-mixing/{WORD_LIST_KEY}/"
+TARGET_WORD_LIST_KEYS = [
+    "large_vs_small", "large_vs_small_permuted",
+    "synonyms_big", "synonyms_big_permuted",
+    "synonyms_happy", "synonyms_happy_permuted",
+    "synonyms_walk", "synonyms_walk_permuted",
+    "text_numbers", "text_numbers_permuted",
+    "two_digit_numbers_4to7",
+    "two_digit_numbers_2468",
+]
+
+# Set (and re-set, per word list, inside process_word_list) by the loop in
+# main(); every plotting helper below reads these as module-level globals.
+WORD_LIST_KEY = None
+WORDS = None
+WORD_TO_COLOR = None
+GRID_ROWS, GRID_COLS = None, None
+PLOTS_DIR = None
 N_LOOKBACK = 50
 
 
@@ -44,7 +57,7 @@ def plot_class_mean_pca(
         Draw onto this existing axes instead of creating (and saving) a new
         standalone figure. Used to compose several rounds into one row.
     """
-    projected = class_means @ pca_dirs.T  # [16, num_components]
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T  # [16, num_components]
     num_dims = projected.shape[1]
     is_3d = (num_dims == 3)
 
@@ -68,13 +81,13 @@ def plot_class_mean_pca(
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
                         [projected[i, 2].item(), projected[j, 2].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
                 else:
                     ax.plot(
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
 
     # Scatter + labels
@@ -163,7 +176,7 @@ def _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid, label=T
                 ax.plot(
                     [projected_means[i, 0].item(), projected_means[j, 0].item()],
                     [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for idx in range(1, len(tail)):
@@ -210,8 +223,9 @@ def _make_bigram_legend(ax):
 def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
     """Individual activations colored by (current token, previous token)."""
     tail = sequence[-N_LOOKBACK:]
-    projected_all = activations @ pca_dirs.T        # [N_LOOKBACK, 2]
-    projected_means = class_means @ pca_dirs.T      # [16, 2]
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T    # [N_LOOKBACK, 2]
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T  # [16, 2]
 
     # ── Main bigram plot ─────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 8))
@@ -308,7 +322,7 @@ def plot_gram_matrix_on_ax(ax, fig, embs):
 
 def save_pca_round_plotly_3d(grid, class_means, pca_dirs, round_num, norm_label, embs_type, suffix=""):
     """Interactive, rotatable 3D PCA scatter for a single mixing round."""
-    projected = class_means @ pca_dirs.T  # [n_words, 3]
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T  # [n_words, 3]
 
     A = grid.build_adjacency_matrix()
     edge_x, edge_y, edge_z = [], [], []
@@ -343,7 +357,7 @@ def save_pca_round_plotly_3d(grid, class_means, pca_dirs, round_num, norm_label,
 
     traces.append(go.Scatter3d(
         x=edge_x, y=edge_y, z=edge_z, mode="lines",
-        line=dict(color="gray", width=2), opacity=0.4,
+        line=dict(color="dimgray", width=2.5), opacity=0.8,
         hoverinfo="skip", showlegend=False,
     ))
 
@@ -415,29 +429,34 @@ def plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, t
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def main():
+def process_word_list(model, word_list_key):
+    global WORD_LIST_KEY, WORDS, WORD_TO_COLOR, GRID_ROWS, GRID_COLS, PLOTS_DIR
+
+    words = WORD_LISTS[word_list_key]
+    n = len(words)
+    side = math.isqrt(n)
+    if side * side != n:
+        print(f"Skipping '{word_list_key}': {n} words is not a perfect square, can't form a grid.")
+        return
+
+    WORD_LIST_KEY = word_list_key
+    WORDS = words
+    WORD_TO_COLOR = build_word_to_color(WORDS)
+    GRID_ROWS, GRID_COLS = side, side
+    PLOTS_DIR = f"results/neighbor-mixing/{WORD_LIST_KEY}/"
     os.makedirs(PLOTS_DIR, exist_ok=True)
-    setup_plotting()
-    plt.rcParams['text.usetex'] = False  # Bypassing missing LaTeX binaries
-    
+
+    print(f"\n--- Running explicit neighbor mixing for '{word_list_key}' ({side}x{side} grid) ---")
+
     set_seed(42)
 
     normalization_type = None  # None or "PreLN" or "PostLN" or "RMSNorm" or "PreLNNormalized"
     embs_type = "learned"  # "random" or "learned"
     d_embed = 128
 
-
-    grid = Torus(words=WORDS, rows=GRID_ROWS, cols=GRID_COLS)
+    grid = Grid(words=WORDS, rows=GRID_ROWS, cols=GRID_COLS)
     adjacency_matrix = torch.tensor(grid.build_adjacency_matrix(), dtype=torch.float32)
     degree_matrix = adjacency_matrix.sum(dim=1, keepdim=True)
-    
-    
-    model = load_model()
-    # normalization_type is our own label consumed by apply_norm() below, not
-    # a valid HookedTransformerConfig setting, so the model itself is loaded
-    # without normalization (its internal LN is never exercised: we only use
-    # it to fetch W_E and to_single_token, and do the norm math by hand).
-    # model = load_toy_model(normalization_type=None, seed=42, n_ctx=SEQ_LEN, n_layers=1, zero_out_pos_emb=True)
 
     if embs_type == "learned":
         # raw token embeddings (just after the embedding lookup, before any norm).
@@ -455,8 +474,8 @@ def main():
         token_ids_tensor = torch.tensor(token_ids, dtype=torch.long, device=model.cfg.device)
 
         embeddings = model.W_E[token_ids_tensor].detach().float().cpu()
-    elif embs_type == "random":     
-        embeddings = torch.randn(16, d_embed)
+    elif embs_type == "random":
+        embeddings = torch.randn(n, d_embed)
 
     def apply_norm(x):
         """Dispatch to the configured normalization, so every case (None,
@@ -485,10 +504,25 @@ def main():
             embs_by_round[r] = embs_curr_t
 
     norm_label = normalization_type.lower() if normalization_type else "none"
-    rounds = [0, 1, 2, 3]
+    rounds = [0, 1, 2, 3, 10]
 
     plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, top_n=2)
     plot_mixing_rounds_pca(grid, embs_by_round, rounds, norm_label, embs_type, top_n=3)
+
+
+def main():
+    setup_plotting()
+    plt.rcParams['text.usetex'] = False  # Bypassing missing LaTeX binaries
+
+    model = load_model()
+    # normalization_type is our own label consumed by apply_norm() below, not
+    # a valid HookedTransformerConfig setting, so the model itself is loaded
+    # without normalization (its internal LN is never exercised: we only use
+    # it to fetch W_E and to_single_token, and do the norm math by hand).
+    # model = load_toy_model(normalization_type=None, seed=42, n_ctx=SEQ_LEN, n_layers=1, zero_out_pos_emb=True)
+
+    for word_list_key in TARGET_WORD_LIST_KEYS:
+        process_word_list(model, word_list_key)
 
 
 

@@ -34,7 +34,7 @@ def scale_embed_hook(activation, hook, scale):
 
 def draw_class_mean_on_ax(ax, grid, class_means, pca_dirs, explained_var, title=""):
     """Scatter of class-mean centroids with grid edges on a specific ax."""
-    projected = class_means @ pca_dirs.T
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
 
     A = grid.build_adjacency_matrix()
     for i in range(len(WORDS)):
@@ -43,7 +43,7 @@ def draw_class_mean_on_ax(ax, grid, class_means, pca_dirs, explained_var, title=
                 ax.plot(
                     [projected[i, 0].item(), projected[j, 0].item()],
                     [projected[i, 1].item(), projected[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for i, word in enumerate(WORDS):
@@ -70,8 +70,9 @@ def draw_class_mean_on_ax(ax, grid, class_means, pca_dirs, explained_var, title=
 
 def draw_bigram_on_ax(ax, grid, sequences, activations, class_means, pca_dirs, explained_var, title=""):
     """Individual activations colored by bigram on a specific ax."""
-    projected_all = activations @ pca_dirs.T
-    projected_means = class_means @ pca_dirs.T
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T
 
     A = grid.build_adjacency_matrix()
     for i in range(len(WORDS)):
@@ -80,7 +81,7 @@ def draw_bigram_on_ax(ax, grid, sequences, activations, class_means, pca_dirs, e
                 ax.plot(
                     [projected_means[i, 0].item(), projected_means[j, 0].item()],
                     [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     # Individual sequence tokens

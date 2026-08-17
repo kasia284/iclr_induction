@@ -69,7 +69,7 @@ def plot_accuracy_curve(all_accs):
 
 def plot_class_mean_pca(grid, class_means, pca_dirs, title="PCA of per-node mean activations", filename_stem="pca_class_means"):
     """Scatter of 16 class-mean centroids with grid edges (Supports 2D and 3D)."""
-    projected = class_means @ pca_dirs.T  # [16, num_components]
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T  # [16, num_components]
     num_dims = projected.shape[1]
     is_3d = (num_dims == 3)
 
@@ -90,13 +90,13 @@ def plot_class_mean_pca(grid, class_means, pca_dirs, title="PCA of per-node mean
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
                         [projected[i, 2].item(), projected[j, 2].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
                 else:
                     ax.plot(
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
 
     # Scatter + labels
@@ -159,7 +159,7 @@ def _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid, label=T
                 ax.plot(
                     [projected_means[i, 0].item(), projected_means[j, 0].item()],
                     [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for idx in range(1, len(tail)):
@@ -206,8 +206,9 @@ def _make_bigram_legend(ax):
 def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
     """Individual activations colored by (current token, previous token)."""
     tail = sequence[-N_LOOKBACK:]
-    projected_all = activations @ pca_dirs.T        # [N_LOOKBACK, 2]
-    projected_means = class_means @ pca_dirs.T      # [16, 2]
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T    # [N_LOOKBACK, 2]
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T  # [16, 2]
 
     # ── Main bigram plot ─────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 8))
@@ -310,7 +311,7 @@ def main():
         sequence = grid.generate_sequence(SEQ_LEN)
         activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK)
         class_means_t = compute_class_means(activations_t, sequence, WORDS, N_LOOKBACK)
-        pca_dirs_t = compute_pca_directions(class_means_t, top_n=3)
+        pca_dirs_t, _ = compute_pca_directions(class_means_t, top_n=3)
 
         activations = activations_t.cpu().numpy()
         class_means = class_means_t.cpu().numpy()
@@ -357,31 +358,36 @@ def main():
         embs_round_4 = embs_round_4_t.numpy()
 
         # Plot 0 rounds
-        pca_dirs_0 = compute_pca_directions(torch.tensor(embs_round_0), top_n=2).numpy()
+        pca_dirs_0, _ = compute_pca_directions(torch.tensor(embs_round_0), top_n=2)
+        pca_dirs_0 = pca_dirs_0.numpy()
         plot_class_mean_pca(grid, embs_round_0, pca_dirs_0,
                             title="PCA of Learned Embeddings\n(0 rounds mixing)",
                             filename_stem="learned_embs_mixing_0")
 
         # Plot 1 round
-        pca_dirs_1 = compute_pca_directions(embs_round_1_t, top_n=2).numpy()
+        pca_dirs_1, _ = compute_pca_directions(embs_round_1_t, top_n=2)
+        pca_dirs_1 = pca_dirs_1.numpy()
         plot_class_mean_pca(grid, embs_round_1, pca_dirs_1,
                             title="PCA of Learned Embeddings\n(after 1 round of mixing)",
                             filename_stem="learned_embs_mixing_1")
 
         # Plot 2 rounds
-        pca_dirs_2 = compute_pca_directions(embs_round_2_t, top_n=2).numpy()
+        pca_dirs_2, _ = compute_pca_directions(embs_round_2_t, top_n=2)
+        pca_dirs_2 = pca_dirs_2.numpy()
         plot_class_mean_pca(grid, embs_round_2, pca_dirs_2,
                             title="PCA of Learned Embeddings\n(after 2 rounds of mixing)",
                             filename_stem="learned_embs_mixing_2")
 
         # Plot 3 rounds
-        pca_dirs_3 = compute_pca_directions(embs_round_3_t, top_n=2).numpy()
+        pca_dirs_3, _ = compute_pca_directions(embs_round_3_t, top_n=2)
+        pca_dirs_3 = pca_dirs_3.numpy()
         plot_class_mean_pca(grid, embs_round_3, pca_dirs_3,
                             title="PCA of Learned Embeddings\n(after 3 rounds of mixing)",
                             filename_stem="learned_embs_mixing_3")
 
         # Plot 4 rounds
-        pca_dirs_4 = compute_pca_directions(embs_round_4_t, top_n=2).numpy()
+        pca_dirs_4, _ = compute_pca_directions(embs_round_4_t, top_n=2)
+        pca_dirs_4 = pca_dirs_4.numpy()
         plot_class_mean_pca(grid, embs_round_4, pca_dirs_4,
                             title="PCA of Learned Embeddings\n(after 4 rounds of mixing)",
                             filename_stem="learned_embs_mixing_4")

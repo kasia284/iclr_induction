@@ -91,7 +91,7 @@ WORDS = [
 GRID_ROWS = 4
 GRID_COLS = 4
 MODEL_NAME = "meta-llama/Llama-3.1-8B"
-LAYER = 0
+LAYER = 26
 SEQ_LEN = 64
 N_SEQUENCES = 16
 SMOOTHING_WINDOW = 30
@@ -296,6 +296,84 @@ class Torus:
         return ["up", "down", "left", "right"]
 
 
+# ── Ring ───────────────────────────────────────────────────────────────────────
+
+class Ring:
+    """Words arranged in a cycle: word order in `words` IS the ring order,
+    i.e. position i is adjacent only to positions i-1 and i+1 (mod n).
+    Unlike Grid/Torus there's no rows/cols layout -- any number of words
+    forms a valid ring, not just perfect squares.
+
+    Exposes word_to_row / word_to_col like Grid/Torus so the same
+    downstream analyses (get_grid_coords, compute_distance_correlation,
+    ...) work unmodified: each word's "coordinates" are its position on a
+    unit circle (cos, sin), so Euclidean/L1 distance between two words
+    smoothly reflects ring-adjacency (including wraparound, e.g. Sunday
+    and Monday end up close together) -- unlike the raw position index,
+    which would treat the two ends of the list as maximally far apart.
+    """
+
+    def __init__(self, words):
+        self.words = words
+        self.n = len(words)
+        self.word_to_pos = {w: i for i, w in enumerate(words)}
+        angles = 2 * np.pi * np.arange(self.n) / self.n
+        self.word_to_row = {w: float(np.cos(angles[i])) for i, w in enumerate(words)}
+        self.word_to_col = {w: float(np.sin(angles[i])) for i, w in enumerate(words)}
+
+    # ── sequence generation ────────────────────────────────────────────────
+
+    def generate_sequence(self, seq_len, start_word=None):
+        """Random walk on the ring: at each step, move one position
+        clockwise or counterclockwise with equal probability."""
+        if start_word is not None:
+            pos = self.word_to_pos[start_word]
+        else:
+            pos = np.random.randint(0, self.n)
+
+        sequence = [self.words[pos]]
+        while len(sequence) < seq_len:
+            direction = np.random.choice(["cw", "ccw"])
+            if direction == "cw":
+                pos = (pos + 1) % self.n
+            else:
+                pos = (pos - 1) % self.n
+            sequence.append(self.words[pos])
+        return sequence
+
+    def generate_batch(self, seq_len, n_sequences):
+        """
+        Generate a batch of random-walk sequences.
+
+        Start words are assigned cyclically so that all ring words
+        appear approximately equally often as starting points.
+        """
+        sequences = []
+
+        for i in range(n_sequences):
+            start_word = self.words[i % self.n]
+            sequences.append(
+                self.generate_sequence(seq_len, start_word=start_word)
+            )
+
+        return sequences
+
+    # ── adjacency ──────────────────────────────────────────────────────────
+
+    def get_valid_next_words(self, word):
+        pos = self.word_to_pos[word]
+        return [self.words[(pos + 1) % self.n], self.words[(pos - 1) % self.n]]
+
+    def build_adjacency_matrix(self):
+        """Return an nxn binary adjacency matrix (symmetric)."""
+        n = self.n
+        A = np.zeros((n, n))
+        for i in range(n):
+            A[i, (i + 1) % n] = 1
+            A[i, (i - 1) % n] = 1
+        return A
+
+
 # ── Seeding ────────────────────────────────────────────────────────────────────
 
 def set_seed(seed: int):
@@ -478,7 +556,6 @@ def compute_class_means_batch(activations_t, sequences, words, n_lookback):
             if word in word_vectors:
                 word_vectors[word].append(activations_t[b, l, :])
                 
-    print(f"{word_vectors.keys()=}")
     # Compute the mean vector for each word across all batch occurrences
     class_means = []
     for word in words:
@@ -508,6 +585,37 @@ def compute_pca_directions(
     
     pca_dirs = einops.rearrange(V, "d_model n -> n d_model")[:top_n, :]
     return pca_dirs, explained_variance_ratio
+
+
+def compute_dirichlet_energy(class_means: np.ndarray, adjacency: np.ndarray) -> float:
+    """Normalized Dirichlet energy: sum of squared representation distances
+    over state pairs adjacent in `adjacency`, divided by the sum of squared
+    distances over ALL state pairs. Low = adjacent states are close in
+    representation space relative to the overall spread (grid-like);
+    high = adjacency carries no representational signal.
+
+    class_means: [n_words, d_model]. adjacency: [n_words, n_words] binary.
+    """
+    diffs = class_means[:, None, :] - class_means[None, :, :]
+    sq_dists = np.sum(diffs ** 2, axis=-1)  # [n_words, n_words]
+    total_energy = sq_dists.sum()
+    adjacent_energy = (adjacency * sq_dists).sum()
+    return float(adjacent_energy / total_energy)
+
+
+def compute_distance_correlation(class_means: np.ndarray, grid_coords: np.ndarray) -> float:
+    """Pearson correlation between representation-space Euclidean distances
+    and state-space Manhattan (L1) distances, over all i != j state pairs.
+    High = representation geometry mirrors the state space's layout.
+
+    class_means: [n_words, d_model]. grid_coords: [n_words, 2] (row, col)
+    per state, in the same word order as class_means.
+    """
+    n = class_means.shape[0]
+    rep_dists = np.linalg.norm(class_means[:, None, :] - class_means[None, :, :], axis=-1)
+    grid_dists = np.abs(grid_coords[:, None, :] - grid_coords[None, :, :]).sum(axis=-1)
+    iu = np.triu_indices(n, k=1)
+    return float(np.corrcoef(rep_dists[iu], grid_dists[iu])[0, 1])
 
 
 def set_square_limits(ax, xs, ys, pad_frac=0.15):
@@ -638,8 +746,8 @@ def plotly_pca_traces(projected, grid, words=WORDS, word_to_color=WORD_TO_COLOR)
                 edge_y += [projected[i, 1].item(), projected[j, 1].item(), None]
     traces.append(go.Scatter(
         x=edge_x, y=edge_y, mode="lines",
-        line=dict(color="gray", width=0.8, dash="dash"),
-        opacity=0.4, showlegend=False, hoverinfo="skip",
+        line=dict(color="dimgray", width=1.2, dash="dash"),
+        opacity=0.8, showlegend=False, hoverinfo="skip",
     ))
     # Centroids
     for i, word in enumerate(words):
@@ -655,6 +763,128 @@ def plotly_pca_traces(projected, grid, words=WORDS, word_to_color=WORD_TO_COLOR)
         ))
     return traces
 
+
+
+def _label_heatmap_ax(ax, words):
+    ax.set_xticks(range(len(words)))
+    ax.set_yticks(range(len(words)))
+    ax.set_xticklabels(words, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(words, fontsize=8)
+
+
+def plot_similarity_panels(cos_sim_matrix, gram_matrix, l2_dist_matrix, words,
+                            plots_dir, filename, title=None):
+    """
+    Plots the pairwise cosine similarity matrix, the raw Gram (inner
+    product) matrix, and the pairwise L2 (Euclidean) distance matrix side by
+    side. Cosine similarity only captures direction; the Gram matrix also
+    preserves embedding magnitude; L2 distance captures absolute separation
+    in embedding space (unlike the other two, smaller = more similar).
+    """
+    fig, (ax_cos, ax_gram, ax_l2) = plt.subplots(1, 3, figsize=(19, 5.5))
+
+    cax = ax_cos.imshow(cos_sim_matrix, cmap="RdBu_r", vmin=-1.0, vmax=1.0)
+    fig.colorbar(cax, ax=ax_cos, fraction=0.046, pad=0.04, label="Cosine Similarity")
+    _label_heatmap_ax(ax_cos, words)
+    ax_cos.set_title("Cosine Similarity", fontsize=10, pad=12)
+
+    vmax = np.abs(gram_matrix).max()
+    gax = ax_gram.imshow(gram_matrix, cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+    fig.colorbar(gax, ax=ax_gram, fraction=0.046, pad=0.04, label="Inner Product")
+    _label_heatmap_ax(ax_gram, words)
+    ax_gram.set_title("Gram Matrix", fontsize=10, pad=12)
+
+    lax = ax_l2.imshow(l2_dist_matrix, cmap="viridis", vmin=0.0, vmax=l2_dist_matrix.max())
+    fig.colorbar(lax, ax=ax_l2, fraction=0.046, pad=0.04, label="L2 Distance")
+    _label_heatmap_ax(ax_l2, words)
+    ax_l2.set_title("Pairwise L2 Distance", fontsize=10, pad=12)
+
+    fig.suptitle(f"Pairwise Similarity{f' ({title})' if title else ''}", fontsize=12)
+    plt.tight_layout()
+
+    save_figure(fig, plots_dir, filename)
+    print(f"Saved {filename}")
+
+
+def compute_and_plot_similarity_panels(embeddings, words, plots_dir, filename, title=None):
+    """Compute cosine similarity, Gram, and pairwise L2 distance matrices for
+    a [n_words, d_model] array of embeddings/activations, then plot all three
+    side by side via plot_similarity_panels."""
+    normalized = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+    cos_sim_matrix = normalized @ normalized.T
+    gram_matrix = embeddings @ embeddings.T
+    diffs = embeddings[:, None, :] - embeddings[None, :, :]
+    l2_dist_matrix = np.linalg.norm(diffs, axis=-1)
+    plot_similarity_panels(cos_sim_matrix, gram_matrix, l2_dist_matrix, words,
+                            plots_dir, filename, title=title)
+
+
+def plot_cross_similarity_panels(cos_sim_matrix, gram_matrix, l2_dist_matrix, words,
+                                  plots_dir, filename, title=None,
+                                  row_label="Embedding", col_label="Unembedding"):
+    """Like plot_similarity_panels, but for CROSS matrices between two
+    different vector sets for the same words (e.g. embedding rows on one
+    axis, unembedding rows on the other) -- generally not symmetric, so
+    both axes are explicitly labeled with which side is which.
+
+    Cross cosine similarities between embeddings and unembeddings tend to
+    be tiny (e.g. +/-0.05) since the two live in nearly orthogonal
+    subspaces, unlike a self-similarity matrix's diagonal of 1s -- so
+    unlike plot_similarity_panels' fixed [-1, 1] scale, this auto-scales
+    to the matrix's own actual range (like the Gram panel already does),
+    or the true structure is invisible against a near-white background."""
+    fig, (ax_cos, ax_gram, ax_l2) = plt.subplots(1, 3, figsize=(19, 5.5))
+
+    cos_vmax = np.abs(cos_sim_matrix).max()
+    cax = ax_cos.imshow(cos_sim_matrix, cmap="RdBu_r", vmin=-cos_vmax, vmax=cos_vmax)
+    fig.colorbar(cax, ax=ax_cos, fraction=0.046, pad=0.04, label="Cosine Similarity")
+    _label_heatmap_ax(ax_cos, words)
+    ax_cos.set_xlabel(f"{col_label} of token j")
+    ax_cos.set_ylabel(f"{row_label} of token i")
+    ax_cos.set_title("Cosine Similarity", fontsize=10, pad=12)
+
+    vmax = np.abs(gram_matrix).max()
+    gax = ax_gram.imshow(gram_matrix, cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+    fig.colorbar(gax, ax=ax_gram, fraction=0.046, pad=0.04, label="Inner Product")
+    _label_heatmap_ax(ax_gram, words)
+    ax_gram.set_xlabel(f"{col_label} of token j")
+    ax_gram.set_ylabel(f"{row_label} of token i")
+    ax_gram.set_title("Gram Matrix", fontsize=10, pad=12)
+
+    lax = ax_l2.imshow(l2_dist_matrix, cmap="viridis", vmin=0.0, vmax=l2_dist_matrix.max())
+    fig.colorbar(lax, ax=ax_l2, fraction=0.046, pad=0.04, label="L2 Distance")
+    _label_heatmap_ax(ax_l2, words)
+    ax_l2.set_xlabel(f"{col_label} of token j")
+    ax_l2.set_ylabel(f"{row_label} of token i")
+    ax_l2.set_title("Pairwise L2 Distance", fontsize=10, pad=12)
+
+    fig.suptitle(
+        f"Pairwise {row_label} vs. {col_label} Similarity{f' ({title})' if title else ''}",
+        fontsize=12,
+    )
+    plt.tight_layout()
+
+    save_figure(fig, plots_dir, filename)
+    print(f"Saved {filename}")
+
+
+def compute_and_plot_cross_similarity_panels(row_vectors, col_vectors, words, plots_dir, filename,
+                                              title=None, row_label="Embedding", col_label="Unembedding"):
+    """Compute cosine similarity, Gram (inner product), and pairwise L2
+    distance matrices BETWEEN two different [n_words, d_model] vector sets
+    for the same words in the same order (e.g. row_vectors=W_E rows,
+    col_vectors=W_U rows), then plot all three side by side via
+    plot_cross_similarity_panels. Unlike compute_and_plot_similarity_panels,
+    these matrices are generally NOT symmetric."""
+    row_normalized = row_vectors / np.linalg.norm(row_vectors, axis=1, keepdims=True)
+    col_normalized = col_vectors / np.linalg.norm(col_vectors, axis=1, keepdims=True)
+    cos_sim_matrix = row_normalized @ col_normalized.T
+    gram_matrix = row_vectors @ col_vectors.T
+    diffs = row_vectors[:, None, :] - col_vectors[None, :, :]
+    l2_dist_matrix = np.linalg.norm(diffs, axis=-1)
+    plot_cross_similarity_panels(cos_sim_matrix, gram_matrix, l2_dist_matrix, words,
+                                  plots_dir, filename, title=title,
+                                  row_label=row_label, col_label=col_label)
 
 
 def plot_attention_heatmaps(model, sequences, layer: int = 0, seq_index: int = 0,

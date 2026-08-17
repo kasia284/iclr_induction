@@ -44,13 +44,13 @@ def plot_class_mean_projection(grid, projected, title="Projection", filename_ste
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
                         [projected[i, 2].item(), projected[j, 2].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
                 else:
                     ax.plot(
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
 
     # Scatter + labels
@@ -149,7 +149,7 @@ def plot_accuracy_curve(all_accs):
 
 def plot_class_mean_pca(grid, class_means, pca_dirs, title="PCA of per-node mean activations", filename_stem="pca_class_means"):
     """Scatter of 16 class-mean centroids with grid edges (Supports 2D and 3D)."""
-    projected = class_means @ pca_dirs.T  # [16, num_components]
+    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T  # [16, num_components]
     num_dims = projected.shape[1]
     is_3d = (num_dims == 3)
 
@@ -170,13 +170,13 @@ def plot_class_mean_pca(grid, class_means, pca_dirs, title="PCA of per-node mean
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
                         [projected[i, 2].item(), projected[j, 2].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
                 else:
                     ax.plot(
                         [projected[i, 0].item(), projected[j, 0].item()],
                         [projected[i, 1].item(), projected[j, 1].item()],
-                        color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                     )
 
     # Scatter + labels
@@ -239,7 +239,7 @@ def _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid, label=T
                 ax.plot(
                     [projected_means[i, 0].item(), projected_means[j, 0].item()],
                     [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="gray", alpha=0.3, linestyle="--", linewidth=0.5,
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
                 )
 
     for idx in range(1, len(tail)):
@@ -286,8 +286,9 @@ def _make_bigram_legend(ax):
 def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs):
     """Individual activations colored by (current token, previous token)."""
     tail = sequence[-N_LOOKBACK:]
-    projected_all = activations @ pca_dirs.T        # [N_LOOKBACK, 2]
-    projected_means = class_means @ pca_dirs.T      # [16, 2]
+    class_means_mean = class_means.mean(axis=0, keepdims=True)
+    projected_all = (activations - class_means_mean) @ pca_dirs.T    # [N_LOOKBACK, 2]
+    projected_means = (class_means - class_means_mean) @ pca_dirs.T  # [16, 2]
 
     # ── Main bigram plot ─────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 8))
