@@ -23,6 +23,16 @@ Usage:
     python morphology-grid-evolution-layers-vs-seqlen.py                # all SWEEP_KEYS
     python morphology-grid-evolution-layers-vs-seqlen.py <key> [<key>...]  # only these keys
 
+    # --post-layernorm caches ln_final.hook_normalized instead of the usual
+    # LAYERS sweep of blocks.{l}.hook_resid_pre -- the residual stream after
+    # ALL 32 blocks AND the model's final RMSNorm (exactly what feeds the
+    # unembedding matrix), stored under the virtual layer key POST_LN_KEY
+    # ("31_post_ln") in a separate cache file so it never collides with a
+    # normal run's cache. Combine with distance-correlation-accuracy-phase-
+    # plane.py --post-layernorm to plot it. Doesn't produce a
+    # plot_grid_evolution grid (nothing to sweep -- there's only one layer).
+    python morphology-grid-evolution-layers-vs-seqlen.py --post-layernorm [<key> ...]
+
 Reuses build_word_token_ids / tokenize_sequences_by_id_batch /
 configure_for_word_list / plot_class_mean_pca / MORPHOLOGY_SWEEP_KEYS from
 01_reproduce.py (imported via importlib since its filename isn't a valid
@@ -82,16 +92,28 @@ CHECKPOINTS = sorted(set(
     np.geomspace(N_LOOKBACK, SEQ_LEN, N_CHECKPOINTS).astype(int).tolist() + [SEQ_LEN]
 ))[:N_CHECKPOINTS]
 
+# Virtual "layer" label for the post-layernorm variant: the residual
+# stream after ALL 32 blocks AND the model's final RMSNorm (TransformerLens
+# hook "ln_final.hook_normalized") -- i.e. exactly what feeds the
+# unembedding matrix, as opposed to LAYERS' "31" (blocks.31.hook_resid_pre,
+# the input to the LAST block: after blocks 0-30, before block 31 runs and
+# before any final normalization).
+POST_LN_KEY = "31_post_ln"
+POST_LN_HOOK_NAME = "ln_final.hook_normalized"
 
-def cache_path(word_list_key):
-    return os.path.join("results/reproduce/data", word_list_key, "grid_evolution_layers_vs_seqlen.npz")
+
+def cache_path(word_list_key, post_layernorm=False):
+    suffix = "_post_ln" if post_layernorm else ""
+    return os.path.join(
+        "results/reproduce/data", word_list_key, f"grid_evolution_layers_vs_seqlen{suffix}.npz"
+    )
 
 
 def _cell_key(layer, k):
     return f"L{layer}_k{k}"
 
 
-def compute_class_means_grid(model, word_list_key):
+def compute_class_means_grid(model, word_list_key, post_layernorm=False):
     words = WORD_LISTS[word_list_key]
     grid = Grid(words=words, rows=4, cols=4)
     word_to_id = reproduce_mod.build_word_token_ids(model, words)
@@ -102,20 +124,27 @@ def compute_class_means_grid(model, word_list_key):
     sequences = grid.generate_batch(SEQ_LEN, len(words))
 
     tokens = reproduce_mod.tokenize_sequences_by_id_batch(model, sequences, word_to_id)
-    names_filter = [f"blocks.{l}.hook_resid_pre" for l in LAYERS]
+
+    # post_layernorm has just ONE virtual "layer" (ln_final only runs once,
+    # at the very end of the network) instead of the usual LAYERS sweep.
+    layers = [POST_LN_KEY] if post_layernorm else LAYERS
+    names_filter = [POST_LN_HOOK_NAME] if post_layernorm else [f"blocks.{l}.hook_resid_pre" for l in LAYERS]
     with torch.no_grad():
         _, cache = model.run_with_cache(tokens.to(model.cfg.device), names_filter=names_filter)
     # {layer: [batch, SEQ_LEN, d_model]}, BOS position removed -- full
     # sequence at every layer, not just the tail.
-    layer_activations = {
-        l: cache[f"blocks.{l}.hook_resid_pre"][:, 1:, :].cpu()
-        for l in LAYERS
-    }
+    if post_layernorm:
+        layer_activations = {POST_LN_KEY: cache[POST_LN_HOOK_NAME][:, 1:, :].cpu()}
+    else:
+        layer_activations = {
+            l: cache[f"blocks.{l}.hook_resid_pre"][:, 1:, :].cpu()
+            for l in LAYERS
+        }
     del cache
     torch.cuda.empty_cache()
 
     class_means = {}
-    for layer in tqdm.tqdm(LAYERS, desc=f"{word_list_key}: layers"):
+    for layer in tqdm.tqdm(layers, desc=f"{word_list_key}: layers"):
         acts = layer_activations[layer]
         for k in CHECKPOINTS:
             window = min(N_LOOKBACK, k)
@@ -126,27 +155,28 @@ def compute_class_means_grid(model, word_list_key):
             ).numpy()
     del layer_activations
 
-    path = cache_path(word_list_key)
+    path = cache_path(word_list_key, post_layernorm=post_layernorm)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez(path, checkpoints=np.array(CHECKPOINTS), **{
         _cell_key(layer, k): class_means[(layer, k)]
-        for layer in LAYERS for k in CHECKPOINTS
+        for layer in layers for k in CHECKPOINTS
     })
     print(f"Cached {path}")
     return class_means
 
 
-def load_or_compute_class_means(model, word_list_key):
-    path = cache_path(word_list_key)
+def load_or_compute_class_means(model, word_list_key, post_layernorm=False):
+    path = cache_path(word_list_key, post_layernorm=post_layernorm)
+    layers = [POST_LN_KEY] if post_layernorm else LAYERS
     if os.path.exists(path):
         data = np.load(path)
         return {
             (layer, k): data[_cell_key(layer, k)]
-            for layer in LAYERS for k in CHECKPOINTS
+            for layer in layers for k in CHECKPOINTS
         }
     if model is None:
         raise RuntimeError(f"No cache at {path} and no model loaded to compute it.")
-    return compute_class_means_grid(model, word_list_key)
+    return compute_class_means_grid(model, word_list_key, post_layernorm=post_layernorm)
 
 
 def plot_grid_evolution(class_means, word_list_key):
@@ -183,7 +213,9 @@ def main():
     setup_plotting()
     plt.rcParams['text.usetex'] = False
 
-    requested = sys.argv[1:]
+    argv = sys.argv[1:]
+    post_layernorm = "--post-layernorm" in argv
+    requested = [a for a in argv if a != "--post-layernorm"]
     if requested:
         unknown = [k for k in requested if k not in SWEEP_KEYS]
         if unknown:
@@ -193,13 +225,18 @@ def main():
         keys = SWEEP_KEYS
 
     model = None
-    if not all(os.path.exists(cache_path(k)) for k in keys):
+    if not all(os.path.exists(cache_path(k, post_layernorm=post_layernorm)) for k in keys):
         model = load_model()
 
     for word_list_key in keys:
         print(f"\n=== {word_list_key} ===")
-        class_means = load_or_compute_class_means(model, word_list_key)
-        plot_grid_evolution(class_means, word_list_key)
+        class_means = load_or_compute_class_means(model, word_list_key, post_layernorm=post_layernorm)
+        # plot_grid_evolution sweeps LAYERS as a grid row per layer, which
+        # doesn't apply to the single post-ln "layer" -- that comparison is
+        # made via distance-correlation-accuracy-phase-plane.py --post-layernorm
+        # instead.
+        if not post_layernorm:
+            plot_grid_evolution(class_means, word_list_key)
 
 
 if __name__ == "__main__":

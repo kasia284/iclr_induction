@@ -103,7 +103,9 @@ def load_phase_curve(word_list_key):
     dc_values = np.array([compute_distance_correlation(class_means[k], ring_coords) for k in CHECKPOINTS])
     energy_values = np.array([compute_dirichlet_energy(class_means[k], adjacency) for k in CHECKPOINTS])
 
-    mean_acc = np.load(acc_path)["all_accs"].mean(axis=0)
+    acc_data = np.load(acc_path)
+    acc_key = "graph_accs" if "graph_accs" in acc_data else "all_accs"
+    mean_acc = acc_data[acc_key].mean(axis=0)
     acc_values = np.array([mean_acc[k - 1] for k in CHECKPOINTS])
 
     return dc_values, energy_values, acc_values, class_means

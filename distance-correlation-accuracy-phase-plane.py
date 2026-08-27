@@ -43,6 +43,21 @@ to include them + a GPU run) and an accuracies_Grid_*.npz cache -- any
 missing member is skipped with a printed note rather than silently
 omitted from the family.
 
+Usage:
+    python distance-correlation-accuracy-phase-plane.py
+
+    # Same, but the x axis is ln_final.hook_normalized (the residual
+    # stream after ALL blocks AND the model's final RMSNorm -- what
+    # actually feeds the unembedding matrix) instead of the usual LAYERS
+    # sweep of blocks.{l}.hook_resid_pre. Requires a
+    # grid_evolution_layers_vs_seqlen_post_ln.npz cache per word list (run
+    # morphology-grid-evolution-layers-vs-seqlen.py --post-layernorm first,
+    # on a GPU). Static PNG/PDF only (saved with a "_post_ln" filename
+    # suffix so it never overwrites the regular final-layer plot) -- skips
+    # the interactive Plotly output, which is keyed to the fixed LAYERS
+    # sweep and isn't worth extending for one extra virtual layer.
+    python distance-correlation-accuracy-phase-plane.py --post-layernorm
+
 Pure cache reads, no GPU / model needed (reuses whatever's already been
 computed by 01_reproduce.py and morphology-grid-evolution-layers-vs-
 seqlen.py). Reuses load_cached_accuracies from 01_reproduce.py, Grid /
@@ -54,6 +69,7 @@ import base64
 import importlib.util
 import json
 import os
+import sys
 import textwrap
 
 import matplotlib.pyplot as plt
@@ -110,13 +126,18 @@ def family_keys():
     return [k for k in WORD_LISTS if frozenset(WORD_LISTS[k]) in family_word_sets]
 
 
-def load_phase_curve(word_list_key):
+def load_phase_curve(word_list_key, post_layernorm=False):
     """Returns (dc_by_layer, energy_by_layer, acc_values, class_means) or
     None if the required caches aren't present. dc_by_layer/energy_by_layer
-    are {layer: [len(CHECKPOINTS)] array} dicts, one entry per LAYERS.
-    class_means is the {(layer, checkpoint): [16, d_model]} dict (reused
-    below to render per-point PCA thumbnails without recomputing)."""
-    if not os.path.exists(grid_evolution_mod.cache_path(word_list_key)):
+    are {layer: [len(CHECKPOINTS)] array} dicts, one entry per LAYERS (or,
+    with post_layernorm=True, a single entry keyed by
+    grid_evolution_mod.POST_LN_KEY -- ln_final.hook_normalized, the residual
+    stream after all blocks AND the model's final RMSNorm, instead of the
+    usual blocks.{l}.hook_resid_pre sweep). class_means is the {(layer,
+    checkpoint): [16, d_model]} dict (reused below to render per-point PCA
+    thumbnails without recomputing)."""
+    layers = [grid_evolution_mod.POST_LN_KEY] if post_layernorm else LAYERS
+    if not os.path.exists(grid_evolution_mod.cache_path(word_list_key, post_layernorm=post_layernorm)):
         return None
     acc_path = f"results/reproduce/data/{word_list_key}/accuracies_Grid_{word_list_key}.npz"
     if not os.path.exists(acc_path):
@@ -128,20 +149,22 @@ def load_phase_curve(word_list_key):
     grid_coords = reproduce_mod.get_grid_coords(grid, words)
     adjacency = grid.build_adjacency_matrix()
 
-    class_means = grid_evolution_mod.load_or_compute_class_means(None, word_list_key)
+    class_means = grid_evolution_mod.load_or_compute_class_means(
+        None, word_list_key, post_layernorm=post_layernorm
+    )
     dc_by_layer = {
         layer: np.array([
             compute_distance_correlation(class_means[(layer, k)], grid_coords)
             for k in CHECKPOINTS
         ])
-        for layer in LAYERS
+        for layer in layers
     }
     energy_by_layer = {
         layer: np.array([
             compute_dirichlet_energy(class_means[(layer, k)], adjacency)
             for k in CHECKPOINTS
         ])
-        for layer in LAYERS
+        for layer in layers
     }
 
     mean_acc = reproduce_mod.load_cached_accuracies(word_list_key).mean(axis=0)
@@ -188,7 +211,15 @@ def thumbnail_data_uri(word_list_key, layer, checkpoint, class_means_at_checkpoi
     return f"data:image/png;base64,{encoded}"
 
 
-def render_static(metric, curves, plot_keys, colors_rgb, cmap, family_label, n_families, description, layer):
+def render_static(metric, curves, plot_keys, colors_rgb, cmap, family_label, n_families, description, layer,
+                   layer_label=None, filename_suffix=""):
+    """layer is the dict key curves are indexed by (e.g. FINAL_LAYER or
+    grid_evolution_mod.POST_LN_KEY); layer_label is what's shown in the axis
+    label/title (defaults to layer itself) -- kept separate so a raw key
+    like "31_post_ln" can be indexed correctly while still displaying a
+    human-readable "31 (post-LN)"."""
+    if layer_label is None:
+        layer_label = layer
     metric_idx = 0 if metric["key"] == "dc" else 1
 
     fig, ax = plt.subplots(figsize=(6.5, 6.3))
@@ -211,7 +242,7 @@ def render_static(metric, curves, plot_keys, colors_rgb, cmap, family_label, n_f
     legend_labels = [family_label[i] for i in range(n_families)]
     ax.legend(legend_handles, legend_labels, loc="best", frameon=True,
               framealpha=1.0, edgecolor="gray", fontsize=7, title="Word list")
-    ax.set_xlabel(metric["axis_label_fn"](layer))
+    ax.set_xlabel(metric["axis_label_fn"](layer_label))
     ax.set_ylabel("Real accuracy (grid task)")
     ax.set_title(
         f"{metric['title']}\n(context length as parameter; arrow = increasing context length)",
@@ -227,21 +258,27 @@ def render_static(metric, curves, plot_keys, colors_rgb, cmap, family_label, n_f
     # which would collapse the margin just reserved above -- neutralize
     # that second call for this figure only.
     fig.tight_layout = lambda *args, **kwargs: None
-    save_figure(fig, PLOTS_DIR, f"{metric['filename']}.pdf")
-    print(f"Saved {metric['filename']}.png")
+    filename = f"{metric['filename']}{filename_suffix}"
+    save_figure(fig, PLOTS_DIR, f"{filename}.pdf")
+    print(f"Saved {filename}.png")
 
 
 def main():
     setup_plotting()
     plt.rcParams['text.usetex'] = False
 
+    post_layernorm = "--post-layernorm" in sys.argv[1:]
+
     keys = family_keys()
     curves = {}
     for key in keys:
-        result = load_phase_curve(key)
+        result = load_phase_curve(key, post_layernorm=post_layernorm)
         if result is None:
-            print(f"Skipping {key}: missing grid_evolution_layers_vs_seqlen.npz "
-                  f"(run morphology-grid-evolution-layers-vs-seqlen.py with this "
+            cache_name = ("grid_evolution_layers_vs_seqlen_post_ln.npz" if post_layernorm
+                          else "grid_evolution_layers_vs_seqlen.npz")
+            post_ln_flag = " --post-layernorm" if post_layernorm else ""
+            print(f"Skipping {key}: missing {cache_name} (run "
+                  f"morphology-grid-evolution-layers-vs-seqlen.py{post_ln_flag} with this "
                   f"key added to SWEEP_KEYS, on a GPU) or accuracies cache.")
             continue
         curves[key] = result
@@ -264,6 +301,16 @@ def main():
         f"{len(CHECKPOINTS)} context lengths sampled: {checkpoints_str} tokens. "
         f"Dot size and the trailing arrowhead both grow with context length."
     )
+
+    if post_layernorm:
+        # Static PNG/PDF only, at the single post-ln "layer" -- the
+        # interactive Plotly output below is keyed to the fixed LAYERS
+        # sweep (layer dropdown + per-layer thumbnail cache) and isn't
+        # worth extending for one extra virtual layer.
+        for metric in METRICS.values():
+            render_static(metric, curves, plot_keys, colors_rgb, cmap, family_label, n_families, description,
+                          grid_evolution_mod.POST_LN_KEY, layer_label="31 (post-LN)", filename_suffix="_post_ln")
+        return
 
     # ── Matplotlib (static) ── one PNG per metric, final layer only ────────
     for metric in METRICS.values():

@@ -8,6 +8,15 @@ Covers two families: "days_of_week" (7-node ring) and "months_of_year"
 random grid-position (here: ring-position) permutations, added to
 word_lists.py alongside utils.Ring.
 
+For each word_list_key, the accuracy curve reports two metrics over the
+same random-walk sequences: "graph" accuracy (ground truth = adjacency on
+the ring as constructed for that key -- the in-context structure) and
+"semantic" accuracy (ground truth = adjacency under the word list's
+natural/default order, e.g. real weekday or calendar order). These
+coincide for the base keys ("days_of_week", "months_of_year") and diverge
+for the "_permuted"/"_rand*" keys, where a gap indicates the model is
+relying on prior semantic knowledge rather than the in-context graph.
+
 Structurally this mirrors reproduce_alternative_graphs.py (a generic,
 self-contained pipeline: accuracy curve + class-mean PCA + bigram PCA for
 any object exposing generate_batch/generate_sequence/get_valid_next_words/
@@ -22,6 +31,7 @@ results/reproduce_ring/plots/{key}/. Safe to re-run: skips the model pass
 entirely for any key that's already fully cached.
 """
 import os
+import re
 import json
 
 import matplotlib.pyplot as plt
@@ -52,45 +62,78 @@ DATA_DIR_ROOT = "results/reproduce_ring/data"
 PLOTS_DIR_ROOT = "results/reproduce_ring/plots"
 
 
+def get_base_word_list_key(word_list_key):
+    """Strip a ring word list's permutation suffix to recover the natural
+    cyclic-order list it's a reordering of, e.g. "days_of_week_permuted" ->
+    "days_of_week", "months_of_year_rand2" -> "months_of_year". For a
+    base key itself this is a no-op."""
+    m = re.match(r"^(.*?)(?:_permuted|_rand\d+)$", word_list_key)
+    return m.group(1) if m else word_list_key
+
+
 # ── Fig 2 left analog: accuracy curve ───────────────────────────────────────
 
-def plot_accuracy_curve(all_accs, word_list_key, plots_dir):
+def plot_accuracy_curve(graph_accs, semantic_accs, word_list_key, plots_dir):
     """Average accuracy across len(words) sequences with uniform starting
-    positions (one per ring word, same convention as 01_reproduce.py)."""
-    mean = all_accs.mean(axis=0)
-    std = all_accs.std(axis=0)
-    x_vals = np.arange(1, len(mean) + 1)
+    positions (one per ring word, same convention as 01_reproduce.py).
+
+    Plots two curves against the same random-walk sequences:
+    - "graph" accuracy: ground truth = adjacency on the ring as actually
+      constructed for this word_list_key (the in-context structure).
+    - "semantic" accuracy: ground truth = adjacency under the word list's
+      natural/default order (e.g. real weekday or calendar order), which
+      only differs from graph accuracy for the "_permuted"/"_rand*" keys.
+      A gap between the two indicates the model is falling back on prior
+      semantic knowledge rather than the in-context graph structure.
+    """
+    x_vals = np.arange(1, graph_accs.shape[1] + 1)
     title = f"Accuracy vs sequence length ({word_list_key}, ring)"
 
+    curves = [
+        ("Graph accuracy", graph_accs, "black", "gray"),
+        ("Semantic accuracy", semantic_accs, "tab:orange", "moccasin"),
+    ]
+
     fig, ax = plt.subplots(figsize=(4.5, 3))
-    ax.plot(x_vals, mean, color="black", linewidth=1.0, label="Mean accuracy")
-    ax.fill_between(x_vals, mean - std, mean + std,
-                     alpha=0.15, color="gray", edgecolor="none", label="$\\pm$1 std")
+    for label, accs, line_color, band_color in curves:
+        mean = accs.mean(axis=0)
+        std = accs.std(axis=0)
+        ax.plot(x_vals, mean, color=line_color, linewidth=1.0, label=label)
+        ax.fill_between(x_vals, mean - std, mean + std,
+                         alpha=0.15, color=band_color, edgecolor="none")
     ax.set_xscale("log")
     ax.set_ylim(0, 1)
     ax.set_xlabel("Sequence length")
-    ax.set_ylabel("Accuracy (ring task)")
+    ax.set_ylabel("Accuracy")
     ax.set_title(title, fontsize=10)
-    ax.legend(loc="upper left", frameon=True, framealpha=1.0, edgecolor="gray")
+    ax.legend(loc="upper left", frameon=True, framealpha=1.0, edgecolor="gray", fontsize=8)
     save_figure(fig, plots_dir, "accuracy_curve.pdf")
 
     pfig = go.Figure()
     x = x_vals.tolist()
-    pfig.add_trace(go.Scatter(
-        x=x, y=(mean + std).tolist(), mode="lines", line=dict(width=0),
-        showlegend=False, hoverinfo="skip",
-    ))
-    pfig.add_trace(go.Scatter(
-        x=x, y=(mean - std).tolist(), mode="lines", line=dict(width=0),
-        fill="tonexty", fillcolor="rgba(128,128,128,0.2)",
-        showlegend=False, hoverinfo="skip",
-    ))
-    pfig.add_trace(go.Scatter(
-        x=x, y=mean.tolist(), mode="lines",
-        line=dict(color="black", width=2), name="Mean accuracy",
-        hovertemplate="pos: %{x}<br>accuracy: %{y:.3f}<extra></extra>",
-    ))
-    pfig.update_layout(**plotly_line_layout(title, "Sequence length", "Accuracy (ring task)"))
+    plotly_colors = {
+        "Graph accuracy": ("black", "rgba(128,128,128,0.2)"),
+        "Semantic accuracy": ("orange", "rgba(255,165,0,0.2)"),
+    }
+    for label, accs, _, _ in curves:
+        mean = accs.mean(axis=0)
+        std = accs.std(axis=0)
+        line_color, fill_color = plotly_colors[label]
+        pfig.add_trace(go.Scatter(
+            x=x, y=(mean + std).tolist(), mode="lines", line=dict(width=0),
+            showlegend=False, hoverinfo="skip", legendgroup=label,
+        ))
+        pfig.add_trace(go.Scatter(
+            x=x, y=(mean - std).tolist(), mode="lines", line=dict(width=0),
+            fill="tonexty", fillcolor=fill_color,
+            showlegend=False, hoverinfo="skip", legendgroup=label,
+        ))
+        pfig.add_trace(go.Scatter(
+            x=x, y=mean.tolist(), mode="lines",
+            line=dict(color=line_color, width=2), name=label, legendgroup=label,
+            hovertemplate="pos: %{x}<br>accuracy: %{y:.3f}<extra></extra>",
+        ))
+    pfig.update_layout(**plotly_line_layout(title, "Sequence length", "Accuracy"))
     save_plotly(pfig, plots_dir, "accuracy_curve.html")
     print(f"Saved {word_list_key}/accuracy_curve")
 
@@ -238,15 +281,38 @@ def run_experiment_pipeline(word_list_key, model):
     ring = Ring(words)
     n_sequences = len(words)
 
+    base_key = get_base_word_list_key(word_list_key)
+    canonical_ring = Ring(WORD_LISTS[base_key])
+
     data_dir = os.path.join(DATA_DIR_ROOT, word_list_key)
     plots_dir = os.path.join(PLOTS_DIR_ROOT, word_list_key)
     acc_path = os.path.join(data_dir, f"accuracies_Ring_{word_list_key}.npz")
     pca_path = os.path.join(data_dir, f"pca_Ring_{word_list_key}.npz")
     seq_path = os.path.join(data_dir, f"sequence_Ring_{word_list_key}.json")
 
-    if os.path.exists(acc_path) and os.path.exists(pca_path) and os.path.exists(seq_path):
-        print(f"\n=== {word_list_key} (cached) ===")
-        all_accs = np.load(acc_path)["all_accs"]
+    os.makedirs(data_dir, exist_ok=True)
+
+    # ── accuracies (graph vs. semantic ground truth) ────────────────────────
+    acc_cache = np.load(acc_path) if os.path.exists(acc_path) else None
+    if acc_cache is not None and "graph_accs" in acc_cache and "semantic_accs" in acc_cache:
+        print(f"\n=== {word_list_key}: accuracies (cached) ===")
+        graph_accs = acc_cache["graph_accs"]
+        semantic_accs = acc_cache["semantic_accs"]
+    else:
+        print(f"\n=== {word_list_key}: accuracies ===")
+        set_seed(42)
+        sequences = ring.generate_batch(SEQ_LEN, n_sequences)
+        graph_accs, semantic_accs = [], []
+        for seq in tqdm.tqdm(sequences, desc=f"{word_list_key}: accuracies"):
+            graph_accs.append(get_model_accuracies(model, ring, seq))
+            semantic_accs.append(get_model_accuracies(model, canonical_ring, seq))
+        graph_accs = np.array(graph_accs)
+        semantic_accs = np.array(semantic_accs)
+        np.savez(acc_path, graph_accs=graph_accs, semantic_accs=semantic_accs)
+
+    # ── activations / PCA ────────────────────────────────────────────────────
+    if os.path.exists(pca_path) and os.path.exists(seq_path):
+        print(f"=== {word_list_key}: PCA (cached) ===")
         pca_data = np.load(pca_path)
         activations = pca_data["activations"]
         class_means = pca_data["class_means"]
@@ -255,17 +321,7 @@ def run_experiment_pipeline(word_list_key, model):
         with open(seq_path) as f:
             sequence = json.load(f)
     else:
-        print(f"\n=== {word_list_key} ===")
-        os.makedirs(data_dir, exist_ok=True)
-
-        set_seed(42)
-        sequences = ring.generate_batch(SEQ_LEN, n_sequences)
-        all_accs = []
-        for seq in tqdm.tqdm(sequences, desc=f"{word_list_key}: accuracies"):
-            all_accs.append(get_model_accuracies(model, ring, seq))
-        all_accs = np.array(all_accs)
-        np.savez(acc_path, all_accs=all_accs)
-
+        print(f"=== {word_list_key}: PCA ===")
         set_seed(42)
         sequence = ring.generate_sequence(SEQ_LEN)
         activations_t = get_activations(model, sequence, LAYER, N_LOOKBACK)
@@ -283,7 +339,7 @@ def run_experiment_pipeline(word_list_key, model):
         with open(seq_path, "w") as f:
             json.dump(sequence, f)
 
-    plot_accuracy_curve(all_accs, word_list_key, plots_dir)
+    plot_accuracy_curve(graph_accs, semantic_accs, word_list_key, plots_dir)
     plot_class_mean_pca(ring, class_means, pca_dirs, words, word_to_color, word_list_key, plots_dir,
                          explained_variance=explained_variance)
     plot_bigram_pca(ring, sequence, activations, class_means, pca_dirs, words, word_to_color,

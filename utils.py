@@ -49,45 +49,6 @@ WORDS = [
     "thirteen", "fourteen", "fifteen", "sixteen"
 ]
 
-# WORDS = [
-#     "Paris", "London", "Berlin", "Rome",
-#     "Madrid", "Vienna", "Dublin", "Prague",
-#     "Athens", "Brussels", "Lisbon", "Warsaw",
-#     "Milan", "Munich", "Zurich", "Geneva"
-# ]
-
-# WORDS = [
-#     "Washington", "Jefferson", "Madison", "Jackson",
-#     "Lincoln", "Grant", "Truman", "Kennedy",
-#     "Nixon", "Ford", "Carter", "Reagan",
-#     "Bush", "Clinton", "Obama", "Trump"
-# ]
-
-# WORDS = [
-#     "and", "stone", "run", "yellow",
-#     "carefully", "circle", "heavy", "computer",
-#     "ancient", "stomach", "ocean", "music",
-#     "ghost", "oxygen", "market", "building"
-# ]
-
-
-# WORDS = [
-#     "George", "John", "Thomas", "James",
-#     "Andrew", "Martin", "William", "Franklin",
-#     "Harry", "Richard", "Gerald", "Jimmy",
-#     "Ronald", "Bill", "Donald", "Joe"
-# ]
-
-
-# WORDS = [
-#     # Group 1: Heavy grammar / structural tokens
-#     "the", "and", "of", "to", 
-#     "with", "it", "that", "is",
-    
-#     # Group 2: Ultra-specific concrete nouns
-#     "dinosaur", "galaxy", "concrete", "submarine", 
-#     "microscope", "volcano", "oxygen", "glacier"
-# ]
 
 GRID_ROWS = 4
 GRID_COLS = 4
@@ -643,6 +604,25 @@ def compute_distance_correlation_graph_embedding(embeddings: np.ndarray, adjacen
     return float(np.corrcoef(rep_dists[iu], graph_dists[iu])[0, 1])
 
 
+def compute_distance_correlation_graph(adjacency_a: np.ndarray, adjacency_b: np.ndarray) -> float:
+    """Like compute_distance_correlation, but for comparing two GRAPHS
+    directly (e.g. a canonical graph vs. a permuted variant) rather than
+    representations against a graph: Pearson correlation between the two
+    graphs' shortest-path (hop-count) distances, over all i != j pairs.
+    Uses graph distance on BOTH sides -- never Euclidean/Manhattan on
+    embedded coordinates -- so it only depends on graph topology.
+
+    adjacency_a, adjacency_b: [n, n] binary adjacency matrices, both indexed
+    in the SAME vertex order (e.g. both reindexed to a shared canonical word
+    order via adjacency_in_order).
+    """
+    n = adjacency_a.shape[0]
+    dist_a = compute_graph_shortest_path_distances(adjacency_a)
+    dist_b = compute_graph_shortest_path_distances(adjacency_b)
+    iu = np.triu_indices(n, k=1)
+    return float(np.corrcoef(dist_a[iu], dist_b[iu])[0, 1])
+
+
 def set_square_limits(ax, xs, ys, pad_frac=0.15):
     """Force equal-width x/y limits (centered on the data) so that, combined
     with ax.set_aspect('equal'), every subplot renders at the same physical
@@ -701,7 +681,7 @@ def save_figure(fig, directory, filename):
     os.makedirs(directory, exist_ok=True)
     stem = os.path.splitext(filename)[0]
     fig.tight_layout()
-    # fig.savefig(os.path.join(directory, stem + ".pdf"))
+    fig.savefig(os.path.join(directory, stem + ".pdf"))
     fig.savefig(os.path.join(directory, stem + ".png"), dpi=300)
     plt.close(fig)
 

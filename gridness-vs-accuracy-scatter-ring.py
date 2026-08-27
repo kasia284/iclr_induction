@@ -59,7 +59,9 @@ def load_class_means(word_list_key):
 
 def load_real_full_context_accuracy(word_list_key):
     path = os.path.join(DATA_DIR, word_list_key, f"accuracies_Ring_{word_list_key}.npz")
-    all_accs = np.load(path)["all_accs"]
+    acc_data = np.load(path)
+    acc_key = "graph_accs" if "graph_accs" in acc_data else "all_accs"
+    all_accs = acc_data[acc_key]
     return float(all_accs[:, -1].mean())
 
 
