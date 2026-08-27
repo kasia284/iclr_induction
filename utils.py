@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import scienceplots
 import einops
 import math
+from scipy.sparse.csgraph import shortest_path
 
 
 from torch import Tensor
@@ -616,6 +617,30 @@ def compute_distance_correlation(class_means: np.ndarray, grid_coords: np.ndarra
     grid_dists = np.abs(grid_coords[:, None, :] - grid_coords[None, :, :]).sum(axis=-1)
     iu = np.triu_indices(n, k=1)
     return float(np.corrcoef(rep_dists[iu], grid_dists[iu])[0, 1])
+
+
+def compute_graph_shortest_path_distances(adjacency: np.ndarray) -> np.ndarray:
+    """All-pairs shortest-path distance matrix (hop count) for an unweighted,
+    undirected binary adjacency matrix."""
+    return shortest_path(adjacency, method="D", directed=False, unweighted=True)
+
+
+def compute_distance_correlation_graph_embedding(embeddings: np.ndarray, adjacency: np.ndarray) -> float:
+    """Like compute_distance_correlation, but against a graph's TOPOLOGY
+    instead of a 2D coordinate layout: Pearson correlation between
+    embedding-space Euclidean distances and the graph's shortest-path
+    (hop-count) distances, over all i != j node pairs. Graph distance --
+    never Euclidean/Manhattan on embedded coordinates -- so this only
+    depends on graph topology and works for any adjacency matrix, not just
+    ones with a natural 2D embedding (grid/ring).
+
+    embeddings: [n, d]. adjacency: [n, n] binary, same node order as embeddings.
+    """
+    n = embeddings.shape[0]
+    rep_dists = np.linalg.norm(embeddings[:, None, :] - embeddings[None, :, :], axis=-1)
+    graph_dists = compute_graph_shortest_path_distances(adjacency)
+    iu = np.triu_indices(n, k=1)
+    return float(np.corrcoef(rep_dists[iu], graph_dists[iu])[0, 1])
 
 
 def set_square_limits(ax, xs, ys, pad_frac=0.15):

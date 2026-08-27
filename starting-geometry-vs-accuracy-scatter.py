@@ -9,10 +9,13 @@ against its own grid, using the SAME machinery every other static-vs-grid
 script in this repo uses (morphology-distance-correlation-sweep.py,
 gridness-static-vs-final-scatter.py, permutation-graph-similarity.py):
 
-  - Distance correlation (utils.compute_distance_correlation): Pearson
-    correlation between W_E Euclidean distances and (row, col) grid-coordinate
-    Manhattan distances. HIGH = starting geometry already mirrors the grid --
-    LOW conflict.
+  - Distance correlation (utils.compute_distance_correlation_graph_embedding):
+    Pearson correlation between W_E Euclidean distances and the grid's
+    shortest-path (hop-count) distances -- graph topology, not (row, col)
+    coordinates, so it's unaffected by Grid's periodic-boundary wraparound
+    (raw Manhattan distance on (row, col) doesn't see that row 0 and row 3
+    are adjacent on a 4x4 torus; hop-count does). HIGH = starting geometry
+    already mirrors the grid -- LOW conflict.
   - Dirichlet energy (utils.compute_dirichlet_energy): sum of squared W_E
     distances over grid-adjacent pairs, normalized by the sum over all
     pairs. LOW = grid-adjacent words already sit close together in W_E --
@@ -52,7 +55,7 @@ import numpy as np
 import plotly.graph_objects as go
 import torch
 
-from utils import Grid, setup_plotting, save_figure, save_plotly, compute_distance_correlation, compute_dirichlet_energy
+from utils import Grid, setup_plotting, save_figure, save_plotly, compute_distance_correlation_graph_embedding, compute_dirichlet_energy
 from word_lists import WORD_LISTS
 
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -66,7 +69,6 @@ def _load_module(name, filename):
     return module
 
 
-reproduce_mod = _load_module("reproduce_01", "01_reproduce.py")
 nn_mod = _load_module("real_embeddings_nearest_neighbors", "real-embeddings-nearest-neighbors.py")
 dot_product_mod = _load_module("activation_unembedding_dot_product", "activation-unembedding-dot-product.py")
 scatter_mod = _load_module("gridness_vs_accuracy_scatter", "gridness-vs-accuracy-scatter.py")
@@ -112,13 +114,12 @@ def compute_starting_geometry(W_E, tokenizer, word_list_key):
     grid and its words' raw W_E embeddings."""
     words = WORD_LISTS[word_list_key]
     grid = make_grid(word_list_key)
-    grid_coords = reproduce_mod.get_grid_coords(grid, words)
     adjacency = grid.build_adjacency_matrix()  # already in `words` order
 
     token_ids = [dot_product_mod.to_single_token(tokenizer, w) for w in words]
     embeddings = W_E[torch.tensor(token_ids, dtype=torch.long)].numpy()
 
-    dc = compute_distance_correlation(embeddings, grid_coords)
+    dc = compute_distance_correlation_graph_embedding(embeddings, adjacency)
     de = compute_dirichlet_energy(embeddings, adjacency)
     return dc, de
 
@@ -205,7 +206,7 @@ def main():
 
     plot_scatter(
         dc_by_key, acc_by_key, SWEEP_KEYS, PLOTS_DIR,
-        x_label="Distance correlation (static W_E vs. grid)",
+        x_label="Distance correlation (static W_E vs. grid, hop-count)",
         title_prefix="Starting-geometry distance correlation vs. real accuracy",
         filename="starting_geometry_distance_correlation_vs_accuracy",
     )
