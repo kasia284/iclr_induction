@@ -30,6 +30,25 @@ mean(e[neighbors of i])), not back onto the original embeddings, so
 "round 10" really is 10 iterated applications. Round 0 (no mixing) is
 always included for reference.
 
+Normalization (--normalization): an optional step applied before each
+round reads its neighbors, mimicking the LayerNorm a real transformer
+applies to the residual stream right before attention:
+  - none:                  no normalization (default).
+  - layernorm:              standard LayerNorm (center + scale to unit
+                            variance -- lands on a sqrt(d)-radius sphere).
+  - rmsnorm:                RMSNorm (scale by root-mean-square, no
+                            centering).
+  - layernorm_unit_sphere:  LayerNorm followed by L2-normalization, so
+                            each activation lands on the unit (radius-1)
+                            hypersphere instead of radius sqrt(d).
+Only the NEIGHBOR CONTRIBUTION each round reads is normalized -- the
+accumulated embeddings themselves are never renormalized in place, same
+"pre-LN" convention 03_neighbor_mixing_real_embeddings_layernorm.py uses
+(mixing on a normalized read, but accumulating in the raw/unnormalized
+residual stream). Round 0 is normalized once up front (so it's what the
+first mixing round would actually read, matching that same script's
+convention), then left as-is afterward.
+
 PCA dimensionality (--dims): 2, 3, or both -- one full set of plots per
 requested dimensionality. Every plot ALWAYS reports each principal
 component's fraction of variance explained (FVE) on its axis label,
@@ -39,6 +58,7 @@ Usage:
     python 03_neighbor_mixing_general.py
     python 03_neighbor_mixing_general.py --source llm --graph ring --rounds 1 2 3 10 30 --dims 2 3
     python 03_neighbor_mixing_general.py --source synthetic --graph torus --words two_digit_numbers
+    python 03_neighbor_mixing_general.py --source llm --normalization rmsnorm --rounds 1 5 20
 
 Or call run_neighbor_mixing_experiment(...) directly from another script.
 """
@@ -105,6 +125,35 @@ def llm_embeddings(words):
     return model.W_E[torch.tensor(token_ids, dtype=torch.long)].float()
 
 
+# ── Normalization (applied to the neighbor-read, not the accumulated state) ───
+
+def layer_norm(tensor, eps=1e-6):
+    mean = torch.mean(tensor, dim=-1, keepdim=True)
+    std = torch.sqrt(torch.mean((tensor - mean) ** 2, dim=-1, keepdim=True) + eps)
+    return (tensor - mean) / std
+
+
+def rms_norm(tensor, eps=1e-6):
+    rms = torch.sqrt(torch.mean(tensor ** 2, dim=-1, keepdim=True) + eps)
+    return tensor / rms
+
+
+def layer_norm_unit_sphere(tensor, eps=1e-6):
+    """LayerNorm followed by an extra L2 normalization, so each activation
+    lands on the unit hypersphere (radius 1) instead of radius sqrt(d)."""
+    centered = tensor - torch.mean(tensor, dim=-1, keepdim=True)
+    norm = torch.norm(centered, dim=-1, keepdim=True)
+    return centered / (norm + eps)
+
+
+NORMALIZATIONS = {
+    "none": None,
+    "layernorm": layer_norm,
+    "rmsnorm": rms_norm,
+    "layernorm_unit_sphere": layer_norm_unit_sphere,
+}
+
+
 # ── Graph construction ────────────────────────────────────────────────────────
 
 def build_graph(graph_type, words):
@@ -123,16 +172,26 @@ def build_graph(graph_type, words):
 
 # ── Multi-round mixing ────────────────────────────────────────────────────────
 
-def run_mixing_rounds(embeddings, adjacency, rounds):
+def run_mixing_rounds(embeddings, adjacency, rounds, normalize_fn=None):
     """embeddings after 0..max(rounds) rounds of e[i] <- e[i] + mean(e[neighbors
     of i]) on the given graph, keeping only round 0 plus the requested rounds.
-    Each round chains onto the PREVIOUS round's output."""
+    Each round chains onto the PREVIOUS round's output.
+
+    normalize_fn: optional callable applied to whatever's being READ for
+    mixing (round 0's starting embeddings, and each round's neighbor
+    contribution) -- never to the accumulated state itself, so the
+    residual stream stays unnormalized while mixing always reads a
+    normalized view of it (pre-LN convention)."""
+    if normalize_fn is None:
+        normalize_fn = lambda x: x
     degree = adjacency.sum(dim=1, keepdim=True)
     keep = sorted(set([0] + list(rounds)))
-    embs_by_round = {0: embeddings}
-    curr = embeddings
+    embs_round_0 = normalize_fn(embeddings)
+    embs_by_round = {0: embs_round_0}
+    curr = embs_round_0
     for r in range(1, max(keep) + 1):
-        neighbor_sum = adjacency @ curr
+        neighbor_read = normalize_fn(curr)
+        neighbor_sum = adjacency @ neighbor_read
         curr = curr + neighbor_sum / degree
         if r in keep:
             embs_by_round[r] = curr
@@ -199,7 +258,8 @@ def plot_round(graph, embeddings, words, word_to_color, round_num, top_n, plots_
 # ── Core experiment ───────────────────────────────────────────────────────────
 
 def run_neighbor_mixing_experiment(source="random", graph_type="grid", rounds=(1, 2, 3, 10),
-                                    dims=(2,), words=None, seed=42, d_embed=D_EMBED):
+                                    dims=(2,), words=None, seed=42, d_embed=D_EMBED,
+                                    normalization="none"):
     """Runs one full neighbor-mixing sweep and produces the plots. Returns
     {(round_num, top_n): explained_variance} for programmatic use.
 
@@ -208,9 +268,14 @@ def run_neighbor_mixing_experiment(source="random", graph_type="grid", rounds=(1
     rounds: list of mixing-round counts to plot (round 0 is always included too)
     dims: which PCA dimensionalities to plot -- (2,), (3,), or (2, 3)
     words: list of words, defaults to utils.WORDS
+    normalization: "none" | "layernorm" | "rmsnorm" | "layernorm_unit_sphere" --
+        applied to the neighbor-read each round (never to the accumulated
+        state), see module docstring.
     """
     if words is None:
         words = WORDS
+    if normalization not in NORMALIZATIONS:
+        raise ValueError(f"Unknown normalization: {normalization!r} (choices: {list(NORMALIZATIONS)})")
 
     graph = build_graph(graph_type, words)
     word_to_color = build_word_to_color(words)
@@ -225,8 +290,9 @@ def run_neighbor_mixing_experiment(source="random", graph_type="grid", rounds=(1
     else:
         raise ValueError(f"Unknown source: {source!r}")
 
-    embs_by_round = run_mixing_rounds(embeddings, adjacency, rounds)
-    tag = f"{source}_{graph_type}"
+    normalize_fn = NORMALIZATIONS[normalization]
+    embs_by_round = run_mixing_rounds(embeddings, adjacency, rounds, normalize_fn=normalize_fn)
+    tag = f"{source}_{graph_type}" if normalization == "none" else f"{source}_{graph_type}_{normalization}"
     plots_dir = os.path.join(PLOTS_DIR, tag)
 
     results = {}
@@ -253,6 +319,9 @@ def main():
                         help="Mixing-round counts to plot (round 0 is always included too).")
     parser.add_argument("--dims", type=int, nargs="+", choices=[2, 3], default=[2],
                         help="PCA dimensionalities to plot: 2, 3, or both.")
+    parser.add_argument("--normalization", choices=list(NORMALIZATIONS), default="none",
+                        help="Normalization applied to the neighbor-read each round "
+                             "(never to the accumulated state). Default: none.")
     parser.add_argument("--words", type=str, default=None,
                         help="word_lists.WORD_LISTS key (defaults to utils.WORDS, "
                              "a 16-word 4x4-compatible list).")
@@ -270,7 +339,7 @@ def main():
 
     run_neighbor_mixing_experiment(
         source=args.source, graph_type=args.graph, rounds=args.rounds,
-        dims=args.dims, words=words, seed=args.seed,
+        dims=args.dims, words=words, seed=args.seed, normalization=args.normalization,
     )
 
 
