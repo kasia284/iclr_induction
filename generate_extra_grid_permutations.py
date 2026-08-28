@@ -2,7 +2,7 @@
 WORD_LISTS (grouped by frozenset(words), so e.g. morphology's 6 existing
 grid-position variants all count as ONE family), adds 2 NEW random
 grid-position permutations of that same word set -- more (distance
-correlation, accuracy) sample points for gridness-vs-accuracy-scatter.py,
+correlation, accuracy) sample points for gridness_vs_accuracy_scatter.py,
 without introducing any new vocabulary.
 
 Mirrors morphology_rand1/2/3's approach (plain random shuffles of the
@@ -19,8 +19,7 @@ family starts at rand1/rand2).
 
 This script only EDITS word_lists.py (pure Python, no GPU/model needed).
 It does not run 01_reproduce.py -- that still needs to happen separately,
-on a GPU machine, for each newly added key before gridness-vs-accuracy-
-scatter.py can plot it.
+on a GPU machine, for each newly added key before gridness_vs_accuracy_scatter.py can plot it.
 """
 import re
 

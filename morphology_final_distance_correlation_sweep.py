@@ -1,0 +1,157 @@
+"""Like morphology_final_dirichlet_energy_sweep.py, but colors each
+permutation's accuracy curve by its FINAL-LAYER distance correlation
+instead of Dirichlet energy -- same "does grid geometry emerge after the
+model processes context" question, just a different geometric summary
+(global rank-order-style correlation between representation-space and
+grid distances over all pairs, vs. Dirichlet energy's local adjacent-vs-
+all-pairs energy ratio). Companion to morphology_distance_correlation_sweep.py, which uses the STATIC W_E distance correlation instead.
+
+Produces a plot analogous to accuracy_curve_sweep.png (mean accuracy vs.
+sequence length, one line per permutation), except lines are colored on a
+continuous scale by their permutation's *final-layer* distance
+correlation instead of by distinct qualitative colors.
+
+Final-layer activations and accuracy curves are both read from
+01_reproduce.py's cache (results/reproduce/data/{key}/pca_all_layers_Grid_
+{key}.npz and accuracies_Grid_{key}.npz respectively, the latter via
+load_final_layer_class_means imported from activation_unembedding_dot_product.py), so 01_reproduce.py must be run first for each key. No model
+load needed at all -- pure cache reads, CPU-only.
+"""
+import importlib.util
+import os
+
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from matplotlib.colors import Normalize
+import numpy as np
+import plotly.graph_objects as go
+
+from utils import Grid, setup_plotting, save_figure, save_plotly, plotly_line_layout, compute_distance_correlation
+from word_lists import WORD_LISTS
+
+REPO = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_module(name, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(REPO, filename))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+reproduce_mod = _load_module("reproduce_01", "01_reproduce.py")
+dot_product_mod = _load_module("activation_unembedding_dot_product", "activation_unembedding_dot_product.py")
+
+PLOTS_DIR = "results/reproduce/plots/morphology_sweep_comparison"
+
+# Mirrors 01_reproduce.py's MORPHOLOGY_SWEEP_KEYS.
+MORPHOLOGY_SWEEP_KEYS = [
+    "morphology_corners", "morphology", "morphology_rand3",
+    "morphology_rand2", "morphology_rand1", "morphology_permuted",
+]
+
+
+def load_cached_accuracies(word_list_key, graph_type="Grid"):
+    """Mirrors 01_reproduce.py's function of the same name."""
+    path = os.path.join(
+        f"results/reproduce/data/{word_list_key}",
+        f"accuracies_{graph_type}_{word_list_key}.npz",
+    )
+    return np.load(path)["all_accs"]
+
+
+def compute_final_layer_distance_correlation(word_list_key):
+    """Distance correlation between word_list_key's grid layout and each
+    word's cached final-layer (contextualized) mean activation."""
+    words = WORD_LISTS[word_list_key]
+    grid = Grid(words=words, rows=4, cols=4)
+    grid_coords = reproduce_mod.get_grid_coords(grid, words)
+
+    activations, final_layer = dot_product_mod.load_final_layer_class_means(word_list_key)
+    return compute_distance_correlation(activations, grid_coords), final_layer
+
+
+def plot_accuracy_by_final_distance_correlation(accs_by_key, dc_by_key, out_dir,
+                                                 filename="accuracy_curve_sweep_by_final_distance_correlation"):
+    """Like 01_reproduce.py's plot_accuracy_comparison, but each
+    permutation's line is colored on a continuous scale by its final-layer
+    distance correlation (dc_by_key), with a colorbar, instead of a fixed
+    qualitative palette."""
+    dc_values = np.array([dc_by_key[k] for k in accs_by_key])
+    norm = Normalize(vmin=dc_values.min(), vmax=dc_values.max())
+    cmap = matplotlib.colormaps["viridis"]
+
+    # Legend/plot order sorted by distance correlation (descending), rather
+    # than dict insertion order (MORPHOLOGY_SWEEP_KEYS), so the legend reads
+    # top-to-bottom as highest-to-lowest DC.
+    sorted_keys = sorted(accs_by_key.keys(), key=lambda k: dc_by_key[k], reverse=True)
+
+    fig, ax = plt.subplots(figsize=(5.2, 3))
+    for key in sorted_keys:
+        all_accs = accs_by_key[key]
+        color = cmap(norm(dc_by_key[key]))
+        mean = all_accs.mean(axis=0)
+        std = all_accs.std(axis=0)
+        ax.plot(mean, color=color, linewidth=1.2, label=f"{key} (DC={dc_by_key[key]:.3f})")
+        ax.fill_between(range(len(mean)), mean - std, mean + std,
+                        alpha=0.15, color=color, edgecolor="none")
+    ax.set_xscale("log")
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Sequence length")
+    ax.set_ylabel("Accuracy (grid task)")
+    ax.set_title("Accuracy vs sequence length, colored by final-layer\nDistance correlation (morphology permutations)", fontsize=9)
+    ax.legend(loc="upper left", frameon=True, framealpha=1.0, edgecolor="gray", fontsize=7)
+    fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax,
+                 label="Distance correlation (final-layer activations)")
+
+    save_figure(fig, out_dir, f"{filename}.pdf")
+    print(f"Saved {filename}")
+
+    # ── Plotly interactive ───────────────────────────────────────────────────
+    pfig = go.Figure()
+    for key in sorted_keys:
+        all_accs = accs_by_key[key]
+        rgba_tuple = cmap(norm(dc_by_key[key]))
+        color = "rgba({},{},{},1.0)".format(*(int(c * 255) for c in rgba_tuple[:3]))
+        fill_color = "rgba({},{},{},0.15)".format(*(int(c * 255) for c in rgba_tuple[:3]))
+        mean = all_accs.mean(axis=0)
+        std = all_accs.std(axis=0)
+        x = list(range(len(mean)))
+        pfig.add_trace(go.Scatter(
+            x=x, y=(mean + std).tolist(), mode="lines", line=dict(width=0),
+            showlegend=False, hoverinfo="skip",
+        ))
+        pfig.add_trace(go.Scatter(
+            x=x, y=(mean - std).tolist(), mode="lines", line=dict(width=0),
+            fill="tonexty", fillcolor=fill_color,
+            showlegend=False, hoverinfo="skip",
+        ))
+        pfig.add_trace(go.Scatter(
+            x=x, y=mean.tolist(), mode="lines",
+            line=dict(color=color, width=2),
+            name=f"{key} (DC={dc_by_key[key]:.3f})",
+            hovertemplate=f"{key}<br>DC={dc_by_key[key]:.3f}<br>pos: " + "%{x}<br>accuracy: %{y:.3f}<extra></extra>",
+        ))
+    pfig.update_layout(**plotly_line_layout(
+        "Accuracy vs sequence length, colored by final-layer distance correlation",
+        "Sequence length", "Accuracy (grid task)"))
+    save_plotly(pfig, out_dir, f"{filename}.html")
+
+
+def main():
+    setup_plotting()
+    plt.rcParams['text.usetex'] = False
+
+    dc_by_key = {}
+    for key in MORPHOLOGY_SWEEP_KEYS:
+        dc, final_layer = compute_final_layer_distance_correlation(key)
+        dc_by_key[key] = dc
+        print(f"{key}: final-layer ({final_layer}) distance correlation = {dc:.4f}")
+
+    accs_by_key = {k: load_cached_accuracies(k) for k in MORPHOLOGY_SWEEP_KEYS}
+    plot_accuracy_by_final_distance_correlation(accs_by_key, dc_by_key, PLOTS_DIR)
+
+
+if __name__ == "__main__":
+    main()

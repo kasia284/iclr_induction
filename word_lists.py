@@ -920,7 +920,7 @@ WORD_LISTS = {
     # generate_extra_grid_permutations.py (same plain-random-shuffle
     # approach as morphology_rand1/2/3), for the distance-correlation-
     # accuracy-phase-plane sweep. Requires 01_reproduce.py and
-    # morphology-grid-evolution-layers-vs-seqlen.py to be run for each new
+    # morphology_grid_evolution_layers_vs_seqlen.py to be run for each new
     # key (GPU) before they can be plotted.
     "original_paper_rand3": [
         "mango", "plane", "sun", "rock",
