@@ -767,9 +767,11 @@ def tokenize_sequence_by_id(model, sequence, word_to_id):
     return torch.tensor([ids], dtype=torch.long)
 
 
-def get_model_accuracies_by_id(model, grid, sequence, word_to_id, fwd_hooks=[]):
+def get_model_accuracies_by_id(model, grid, sequence, word_to_id, fwd_hooks=[], include_self=False):
     """Like utils.get_model_accuracies, but tokenizes via word_to_id so every
-    word is guaranteed exactly one token."""
+    word is guaranteed exactly one token. include_self=True also counts
+    probability mass on the current token itself as correct, not just on
+    its grid neighbors."""
     tokens = tokenize_sequence_by_id(model, sequence, word_to_id)
     logits = model.run_with_hooks(tokens.to(model.cfg.device), fwd_hooks=fwd_hooks)
     probs = torch.softmax(logits, dim=-1)
@@ -777,8 +779,10 @@ def get_model_accuracies_by_id(model, grid, sequence, word_to_id, fwd_hooks=[]):
 
     accuracies = []
     for i in range(len(sequence)):
-        valid_next = grid.get_valid_next_words(sequence[i])
-        token_ids = torch.tensor([word_to_id[w] for w in valid_next])
+        target_words = grid.get_valid_next_words(sequence[i])
+        if include_self:
+            target_words = target_words + [sequence[i]]
+        token_ids = torch.tensor([word_to_id[w] for w in target_words])
         accuracies.append(probs[i, token_ids].sum().item())
     return accuracies
 

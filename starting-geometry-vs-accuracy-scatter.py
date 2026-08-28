@@ -30,6 +30,17 @@ random-walk sequences) -- same quantity as gridness-vs-accuracy-scatter.py's
 y axis, just plotted here against the STARTING geometry's conflict instead
 of the FINAL-LAYER geometry's alignment.
 
+Usage:
+    python starting-geometry-vs-accuracy-scatter.py
+
+    # Same, but "correct" also counts probability mass on the CURRENT
+    # token itself, not just on its grid neighbors ("staying put" counts
+    # too). Reads accuracies_Grid_{key}_with_self.npz instead of
+    # accuracies_Grid_{key}.npz -- run compute-accuracy-with-self.py
+    # first (needs a GPU) to produce that cache. Output filenames get a
+    # "_with_self" suffix so they never collide with the regular run's.
+    python starting-geometry-vs-accuracy-scatter.py --with-self
+
 One point per word list. Restricted to the "morphology" / "text_numbers" /
 "two_digit_numbers" families (FAMILY_BASE_KEYS below, same restriction as
 distance-correlation-accuracy-phase-plane.py) -- i.e. each base key plus
@@ -48,6 +59,7 @@ model forward passes.
 import importlib.util
 import math
 import os
+import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -85,20 +97,33 @@ def family_keys():
     return [k for k in WORD_LISTS if frozenset(WORD_LISTS[k]) in family_word_sets]
 
 
-def discover_sweep_keys():
+def accuracy_cache_path(word_list_key, with_self=False):
+    suffix = "_with_self" if with_self else ""
+    return f"results/reproduce/data/{word_list_key}/accuracies_Grid_{word_list_key}{suffix}.npz"
+
+
+def load_real_full_context_accuracy(word_list_key, with_self=False):
+    """Mean accuracy at the last position (seq len 1400), averaged over the
+    cached random-walk sequences. Mirrors gridness-vs-accuracy-scatter.py's
+    function of the same name, but can read the include_self=True variant
+    (accuracies_Grid_{key}_with_self.npz, from compute-accuracy-with-self.py)
+    instead of the regular "neighbors only" cache."""
+    all_accs = np.load(accuracy_cache_path(word_list_key, with_self=with_self))["all_accs"]
+    return float(all_accs[:, -1].mean())
+
+
+def discover_sweep_keys(with_self=False):
     """family_keys() members that also have a cached accuracy curve."""
     keys = []
     for key in family_keys():
-        acc_path = f"results/reproduce/data/{key}/accuracies_Grid_{key}.npz"
+        acc_path = accuracy_cache_path(key, with_self=with_self)
         if os.path.exists(acc_path):
             keys.append(key)
         else:
-            print(f"Skipping {key}: missing accuracies_Grid_{key}.npz "
-                  f"(run 01_reproduce.py with this key first).")
+            print(f"Skipping {key}: missing {os.path.basename(acc_path)} "
+                  f"(run {'compute-accuracy-with-self.py' if with_self else '01_reproduce.py'} "
+                  f"with this key first).")
     return keys
-
-
-SWEEP_KEYS = discover_sweep_keys()
 
 
 def make_grid(word_list_key):
@@ -186,35 +211,40 @@ def main():
     setup_plotting()
     plt.rcParams['text.usetex'] = False
 
-    if not SWEEP_KEYS:
-        raise RuntimeError(
-            "No word lists with a cached accuracies_Grid_{key}.npz found -- "
-            "run 01_reproduce.py for at least one word list first."
-        )
-    print(f"Found {len(SWEEP_KEYS)} word lists with cached accuracy curves.")
+    with_self = "--with-self" in sys.argv[1:]
+    sweep_keys = discover_sweep_keys(with_self=with_self)
+
+    if not sweep_keys:
+        cache_name = "accuracies_Grid_{key}_with_self.npz" if with_self else "accuracies_Grid_{key}.npz"
+        producer = "compute-accuracy-with-self.py" if with_self else "01_reproduce.py"
+        raise RuntimeError(f"No word lists with a cached {cache_name} found -- run {producer} first.")
+    print(f"Found {len(sweep_keys)} word lists with cached accuracy curves"
+          f"{' (with-self)' if with_self else ''}.")
 
     print("Loading static embedding matrix (W_E)...")
     model = nn_mod.load_embedding_only_model()
     W_E, tokenizer = model.W_E, model.tokenizer
 
     dc_by_key, de_by_key, acc_by_key = {}, {}, {}
-    for key in SWEEP_KEYS:
+    for key in sweep_keys:
         dc_by_key[key], de_by_key[key] = compute_starting_geometry(W_E, tokenizer, key)
-        acc_by_key[key] = scatter_mod.load_real_full_context_accuracy(key)
+        acc_by_key[key] = load_real_full_context_accuracy(key, with_self=with_self)
         print(f"{key}: starting DC = {dc_by_key[key]:.4f}, starting DE = {de_by_key[key]:.4f}, "
               f"real accuracy = {acc_by_key[key]:.4f}")
 
+    acc_label_suffix = " (neighbors + self)" if with_self else ""
+    filename_suffix = "_with_self" if with_self else ""
     plot_scatter(
-        dc_by_key, acc_by_key, SWEEP_KEYS, PLOTS_DIR,
+        dc_by_key, acc_by_key, sweep_keys, PLOTS_DIR,
         x_label="Distance correlation (static W_E vs. grid, hop-count)",
-        title_prefix="Starting-geometry distance correlation vs. real accuracy",
-        filename="starting_geometry_distance_correlation_vs_accuracy",
+        title_prefix=f"Starting-geometry distance correlation vs. real accuracy{acc_label_suffix}",
+        filename=f"starting_geometry_distance_correlation_vs_accuracy{filename_suffix}",
     )
     plot_scatter(
-        de_by_key, acc_by_key, SWEEP_KEYS, PLOTS_DIR,
+        de_by_key, acc_by_key, sweep_keys, PLOTS_DIR,
         x_label="Dirichlet energy (static W_E vs. grid)",
-        title_prefix="Starting-geometry Dirichlet energy vs. real accuracy",
-        filename="starting_geometry_dirichlet_energy_vs_accuracy",
+        title_prefix=f"Starting-geometry Dirichlet energy vs. real accuracy{acc_label_suffix}",
+        filename=f"starting_geometry_dirichlet_energy_vs_accuracy{filename_suffix}",
     )
 
 

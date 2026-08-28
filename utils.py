@@ -411,8 +411,11 @@ def simple_tokenize(sequence, vocab):
 
 # ── Accuracy ───────────────────────────────────────────────────────────────────
 
-def get_model_accuracies(model, grid, sequence, fwd_hooks=[]):
-    """Per-position probability assigned to valid next tokens."""
+def get_model_accuracies(model, grid, sequence, fwd_hooks=[], include_self=False):
+    """Per-position probability assigned to valid next tokens, optionally
+    (include_self=True) also including the current token itself -- i.e.
+    probability mass on "stay put" counts as correct too, not just moving
+    to a neighbor."""
     tokens = tokenize_sequence(model, sequence)
     logits = model.run_with_hooks(tokens.to(model.cfg.device), fwd_hooks=fwd_hooks)
     probs = torch.softmax(logits, dim=-1)
@@ -420,9 +423,11 @@ def get_model_accuracies(model, grid, sequence, fwd_hooks=[]):
 
     accuracies = []
     for i in range(len(sequence)):
-        valid_next = grid.get_valid_next_words(sequence[i])
+        target_words = grid.get_valid_next_words(sequence[i])
+        if include_self:
+            target_words = target_words + [sequence[i]]
         token_ids = torch.tensor(
-            [model.tokenizer.encode(" " + w, add_special_tokens=False) for w in valid_next]
+            [model.tokenizer.encode(" " + w, add_special_tokens=False) for w in target_words]
         ).squeeze()
         accuracies.append(probs[i, token_ids].sum().item())
     return accuracies

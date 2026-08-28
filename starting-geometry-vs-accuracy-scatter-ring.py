@@ -37,9 +37,20 @@ safetensors-only loader as real-embeddings-nearest-neighbors.py, and token
 ids via to_single_token from activation-unembedding-dot-product.py. Family
 coloring (assign_families) is reused from gridness-vs-accuracy-scatter.py
 (topology-agnostic). CPU-only, no GPU / new model forward passes.
+
+Usage:
+    python starting-geometry-vs-accuracy-scatter-ring.py
+
+    # Same, but "correct" also counts probability mass on the CURRENT
+    # token itself, not just on its ring neighbors. Reads
+    # accuracies_Ring_{key}_with_self.npz instead -- run
+    # compute-accuracy-with-self.py first (needs a GPU) to produce it.
+    # Output filenames get a "_with_self" suffix.
+    python starting-geometry-vs-accuracy-scatter-ring.py --with-self
 """
 import importlib.util
 import os
+import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -70,27 +81,30 @@ scatter_mod = _load_module("gridness_vs_accuracy_scatter", "gridness-vs-accuracy
 RING_SWEEP_KEYS = ring_mod.RING_SWEEP_KEYS
 
 
-def discover_sweep_keys():
+def accuracy_cache_path(word_list_key, with_self=False):
+    suffix = "_with_self" if with_self else ""
+    return os.path.join(DATA_DIR, word_list_key, f"accuracies_Ring_{word_list_key}{suffix}.npz")
+
+
+def discover_sweep_keys(with_self=False):
     """RING_SWEEP_KEYS members that also have a cached accuracy curve."""
     keys = []
     for key in RING_SWEEP_KEYS:
-        acc_path = os.path.join(DATA_DIR, key, f"accuracies_Ring_{key}.npz")
+        acc_path = accuracy_cache_path(key, with_self=with_self)
         if os.path.exists(acc_path):
             keys.append(key)
         else:
-            print(f"Skipping {key}: missing accuracies_Ring_{key}.npz "
-                  f"(run 01_reproduce_ring.py with this key first).")
+            print(f"Skipping {key}: missing {os.path.basename(acc_path)} "
+                  f"(run {'compute-accuracy-with-self.py' if with_self else '01_reproduce_ring.py'} "
+                  f"with this key first).")
     return keys
 
 
-SWEEP_KEYS = discover_sweep_keys()
-
-
-def load_real_full_context_accuracy(word_list_key):
+def load_real_full_context_accuracy(word_list_key, with_self=False):
     """Mirrors gridness-vs-accuracy-scatter-ring.py's function of the same
-    name."""
-    path = os.path.join(DATA_DIR, word_list_key, f"accuracies_Ring_{word_list_key}.npz")
-    acc_data = np.load(path)
+    name; with_self=True reads the include_self=True variant instead
+    (accuracies_Ring_{key}_with_self.npz, from compute-accuracy-with-self.py)."""
+    acc_data = np.load(accuracy_cache_path(word_list_key, with_self=with_self))
     acc_key = "graph_accs" if "graph_accs" in acc_data else "all_accs"
     all_accs = acc_data[acc_key]
     return float(all_accs[:, -1].mean())
@@ -170,35 +184,40 @@ def main():
     setup_plotting()
     plt.rcParams['text.usetex'] = False
 
-    if not SWEEP_KEYS:
-        raise RuntimeError(
-            "No ring word lists with a cached accuracies_Ring_{key}.npz found -- "
-            "run 01_reproduce_ring.py for at least one word list first."
-        )
-    print(f"Found {len(SWEEP_KEYS)} ring word lists with cached accuracy curves.")
+    with_self = "--with-self" in sys.argv[1:]
+    sweep_keys = discover_sweep_keys(with_self=with_self)
+
+    if not sweep_keys:
+        cache_name = "accuracies_Ring_{key}_with_self.npz" if with_self else "accuracies_Ring_{key}.npz"
+        producer = "compute-accuracy-with-self.py" if with_self else "01_reproduce_ring.py"
+        raise RuntimeError(f"No ring word lists with a cached {cache_name} found -- run {producer} first.")
+    print(f"Found {len(sweep_keys)} ring word lists with cached accuracy curves"
+          f"{' (with-self)' if with_self else ''}.")
 
     print("Loading static embedding matrix (W_E)...")
     model = nn_mod.load_embedding_only_model()
     W_E, tokenizer = model.W_E, model.tokenizer
 
     dc_by_key, de_by_key, acc_by_key = {}, {}, {}
-    for key in SWEEP_KEYS:
+    for key in sweep_keys:
         dc_by_key[key], de_by_key[key] = compute_starting_geometry(W_E, tokenizer, key)
-        acc_by_key[key] = load_real_full_context_accuracy(key)
+        acc_by_key[key] = load_real_full_context_accuracy(key, with_self=with_self)
         print(f"{key}: starting DC = {dc_by_key[key]:.4f}, starting DE = {de_by_key[key]:.4f}, "
               f"real accuracy = {acc_by_key[key]:.4f}")
 
+    acc_label_suffix = " (neighbors + self)" if with_self else ""
+    filename_suffix = "_with_self" if with_self else ""
     plot_scatter(
-        dc_by_key, acc_by_key, SWEEP_KEYS, PLOTS_DIR,
+        dc_by_key, acc_by_key, sweep_keys, PLOTS_DIR,
         x_label="Distance correlation (static W_E vs. ring, hop-count)",
-        title_prefix="Starting-geometry distance correlation vs. real accuracy (ring)",
-        filename="starting_geometry_distance_correlation_vs_accuracy_ring",
+        title_prefix=f"Starting-geometry distance correlation vs. real accuracy (ring){acc_label_suffix}",
+        filename=f"starting_geometry_distance_correlation_vs_accuracy_ring{filename_suffix}",
     )
     plot_scatter(
-        de_by_key, acc_by_key, SWEEP_KEYS, PLOTS_DIR,
+        de_by_key, acc_by_key, sweep_keys, PLOTS_DIR,
         x_label="Dirichlet energy (static W_E vs. ring)",
-        title_prefix="Starting-geometry Dirichlet energy vs. real accuracy (ring)",
-        filename="starting_geometry_dirichlet_energy_vs_accuracy_ring",
+        title_prefix=f"Starting-geometry Dirichlet energy vs. real accuracy (ring){acc_label_suffix}",
+        filename=f"starting_geometry_dirichlet_energy_vs_accuracy_ring{filename_suffix}",
     )
 
 
