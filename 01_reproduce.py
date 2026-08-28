@@ -7,8 +7,6 @@ import gc
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import plotly.graph_objects as go
 import tqdm
 
@@ -19,6 +17,8 @@ from utils import (
     smooth, plotly_pca_layout, plotly_line_layout, plotly_pca_traces, save_plotly,
     set_square_limits, compute_and_plot_similarity_panels,
     compute_dirichlet_energy, compute_distance_correlation,
+    draw_class_mean_pca_on_ax, add_pca_grid_faces_3d,
+    draw_bigram_scatter_on_ax, make_bigram_legend,
 )
 from utils import plot_attention_heatmaps
 from word_lists import WORD_LISTS
@@ -198,69 +198,12 @@ def plot_class_mean_pca(grid, class_means, pca_dirs, suffix="", title=None, ax=N
         else:
             fig, ax = plt.subplots(figsize=(5, 5))
 
-    # Grid edges (gray dashed)
-    A = grid.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                if is_3d:
-                    ax.plot(
-                        [projected[i, 0].item(), projected[j, 0].item()],
-                        [projected[i, 1].item(), projected[j, 1].item()],
-                        [projected[i, 2].item(), projected[j, 2].item()],
-                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                    )
-                else:
-                    ax.plot(
-                        [projected[i, 0].item(), projected[j, 0].item()],
-                        [projected[i, 1].item(), projected[j, 1].item()],
-                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                    )
-
-    # Grey face for each grid cell of the plotted shape (3D only).
+    # Grey grid-cell faces (3D only) first, so they stay behind the grid
+    # edges (gray dashed) + star centroid markers + word labels drawn next.
     if is_3d:
-        word_to_idx = {w: i for i, w in enumerate(WORDS)}
-        is_torus = type(grid).__name__ == "Torus"
-        r_range = range(grid.rows) if is_torus else range(grid.rows - 1)
-        c_range = range(grid.cols) if is_torus else range(grid.cols - 1)
-        faces = []
-        for r in r_range:
-            for c in c_range:
-                r2, c2 = (r + 1) % grid.rows, (c + 1) % grid.cols
-                corners = [grid.grid[r][c], grid.grid[r][c2], grid.grid[r2][c2], grid.grid[r2][c]]
-                idxs = [word_to_idx[w] for w in corners]
-                faces.append([projected[i, :3].tolist() for i in idxs])
-        if faces:
-            ax.add_collection3d(Poly3DCollection(
-                faces, facecolor=(0.6, 0.6, 0.6, 0.4),
-                edgecolor=(0.4, 0.4, 0.4, 0.6), linewidths=0.5,
-            ))
-
-    # Scatter + labels
-    for i, word in enumerate(WORDS):
-        if is_3d:
-            ax.scatter(
-                projected[i, 0].item(), projected[i, 1].item(), projected[i, 2].item(),
-                color=WORD_TO_COLOR[word], s=120, marker="*",
-                edgecolors="black", linewidths=0.5, zorder=5,
-            )
-            # ax.text is used for 3D positioning instead of ax.annotate
-            ax.text(
-                projected[i, 0].item(), projected[i, 1].item(), projected[i, 2].item(),
-                word, fontsize=8,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-            )
-        else:
-            ax.scatter(
-                projected[i, 0].item(), projected[i, 1].item(),
-                color=WORD_TO_COLOR[word], s=120, marker="*",
-                edgecolors="black", linewidths=0.5, zorder=5,
-            )
-            ax.annotate(
-                word, (projected[i, 0].item(), projected[i, 1].item()),
-                xytext=(5, 5), textcoords="offset points", fontsize=8,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-            )
+        add_pca_grid_faces_3d(ax, grid, WORDS, projected)
+    draw_class_mean_pca_on_ax(ax, grid, projected, words=WORDS, word_to_color=WORD_TO_COLOR,
+                               marker_size=120, label_fontsize=8, label_offset=(5, 5), is_3d=is_3d)
 
     # Axis Labels & Aspect Ratio
     if explained_variance is not None:
@@ -457,201 +400,7 @@ def plot_de_dc_across_layers(layers_by_series, adjacency, grid_coords, suffix=""
     print(f"Saved {out_name}")
 
 
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
-
-
-def plot_class_mean_pca_3d(grid, class_means, pca_dirs, title=None):
-    """Scatter of 16 class-mean centroids with grid edges in 3D."""
-    # pca_dirs must now contain the top 3 principal components -> [3, d]
-    projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T  # Shape: [16, 3]
-
-    # ── Matplotlib 3D Plot ───────────────────────────────────────────────────
-    fig = plt.figure(figsize=(6, 6))
-    ax = fig.add_subplot(111, projection="3d")
-
-    # Grid edges (gray dashed)
-    A = grid.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                ax.plot(
-                    [projected[i, 0].item(), projected[j, 0].item()],
-                    [projected[i, 1].item(), projected[j, 1].item()],
-                    [projected[i, 2].item(), projected[j, 2].item()],
-                    color="gray",
-                    alpha=0.3,
-                    linestyle="--",
-                    linewidth=0.5,
-                )
-
-    # Scatter + labels
-    for i, word in enumerate(WORDS):
-        x, y, z = (
-            projected[i, 0].item(),
-            projected[i, 1].item(),
-            projected[i, 2].item(),
-        )
-
-        ax.scatter(
-            x,
-            y,
-            z,
-            color=WORD_TO_COLOR[word],
-            s=120,
-            marker="*",
-            edgecolors="black",
-            linewidths=0.5,
-            zorder=5,
-        )
-
-        # ax.text is used instead of ax.annotate for 3D coordinate support
-        ax.text(
-            x,
-            y,
-            z,
-            word,
-            fontsize=8,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-        )
-
-    ax.set_xlabel("PC1")
-    ax.set_ylabel("PC2")
-    ax.set_zlabel("PC3")
-    ax.set_title(
-        title or "3D PCA of per-node mean activations", fontsize=10
-    )
-
-    # Note: 'equal' aspect ratio isn't natively supported the same way in 3D across all MPL versions,
-    # but you can use ax.set_box_aspect((1,1,1)) to keep the bounding box square.
-    ax.set_box_aspect((1, 1, 1))
-
-    save_figure(fig, PLOTS_DIR, "pca_class_means_3d.pdf")
-    print("Saved pca_class_means_3d")
-
-    # ── Plotly Interactive 3D Plot ───────────────────────────────────────────
-    plotly_traces = []
-
-    # 1. Build 3D lines for edges
-    edge_x, edge_y, edge_z = [], [], []
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                edge_x.extend(
-                    [projected[i, 0].item(), projected[j, 0].item(), None]
-                )
-                edge_y.extend(
-                    [projected[i, 1].item(), projected[j, 1].item(), None]
-                )
-                edge_z.extend(
-                    [projected[i, 2].item(), projected[j, 2].item(), None]
-                )
-
-    plotly_traces.append(
-        go.Scatter3d(
-            x=edge_x,
-            y=edge_y,
-            z=edge_z,
-            mode="lines",
-            line=dict(color="dimgray", width=2),
-            opacity=0.7,
-            hoverinfo="skip",
-        )
-    )
-
-    # 2. Build 3D scatter points
-    xs = [projected[i, 0].item() for i in range(len(WORDS))]
-    ys = [projected[i, 1].item() for i in range(len(WORDS))]
-    zs = [projected[i, 2].item() for i in range(len(WORDS))]
-    colors = [WORD_TO_COLOR[word] for word in WORDS]
-
-    plotly_traces.append(
-        go.Scatter3d(
-            x=xs,
-            y=ys,
-            z=zs,
-            mode="markers+text",
-            marker=dict(
-                size=10,
-                color=colors,
-                symbol="star",
-                line=dict(color="black", width=1),
-            ),
-            text=WORDS,
-            textposition="top center",
-            hoverinfo="text",
-        )
-    )
-
-    # 3. Create figure and apply 3D layout scene
-    pfig = go.Figure(data=plotly_traces)
-    pfig.update_layout(
-        title=title or "3D PCA of per-node mean activations",
-        scene=dict(
-            xaxis_title="PC1",
-            yaxis_title="PC2",
-            zaxis_title="PC3",
-            aspectmode="cube",
-        ),
-        margin=dict(l=0, r=0, b=0, t=40),
-    )
-
-    save_plotly(pfig, PLOTS_DIR, f"pca_class_means_3d_{title}.html")
-
 # ── Fig 6: Bigram PCA ─────────────────────────────────────────────────────────
-
-def _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid, label=True):
-    """Draw bigram scatter on a given axes. Shared by main plot and inset."""
-    A = grid.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                ax.plot(
-                    [projected_means[i, 0].item(), projected_means[j, 0].item()],
-                    [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                )
-
-    for idx in range(1, len(tail)):
-        cur_word = tail[idx]
-        prev_word = tail[idx - 1]
-        ax.scatter(
-            projected_all[idx, 0].item(), projected_all[idx, 1].item(),
-            c=WORD_TO_COLOR[cur_word],
-            edgecolors=WORD_TO_COLOR[prev_word],
-            linewidths=1.0, s=25, alpha=1.0, zorder=3,
-        )
-
-    for i, word in enumerate(WORDS):
-        ax.scatter(
-            projected_means[i, 0].item(), projected_means[i, 1].item(),
-            color=WORD_TO_COLOR[word], s=120, marker="*",
-            edgecolors="black", linewidths=1.0, zorder=5,
-        )
-        if label:
-            ax.annotate(
-                word, (projected_means[i, 0].item(), projected_means[i, 1].item()),
-                xytext=(5, 5), textcoords="offset points", fontsize=7,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-            )
-
-
-def _make_bigram_legend(ax):
-    """Add legend for bigram PCA plots."""
-    legend_elements = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="gray",
-               markersize=8, markeredgecolor="black", markeredgewidth=1.5,
-               label="Fill = current token"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
-               markersize=8, markeredgecolor="gray", markeredgewidth=1.5,
-               label="Border = previous token"),
-        Line2D([0], [0], marker="*", color="w", markerfacecolor="gray",
-               markersize=12, markeredgecolor="black", markeredgewidth=0.8,
-               label="Token centroid"),
-    ]
-    ax.legend(handles=legend_elements, loc="upper left", frameon=True,
-              framealpha=1.0, edgecolor="gray", fontsize=8)
-
 
 def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs, suffix="", explained_variance=None):
     """Individual activations colored by (current token, previous token)."""
@@ -665,8 +414,11 @@ def plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs, suffix="
 
     # ── Main bigram plot ─────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 8))
-    _draw_bigram_scatter(ax, projected_all, projected_means, tail, grid)
-    _make_bigram_legend(ax)
+    draw_bigram_scatter_on_ax(ax, projected_all, projected_means, tail, grid,
+                               words=WORDS, word_to_color=WORD_TO_COLOR,
+                               marker_size=120, label_fontsize=7,
+                               individual_size=25, individual_linewidth=1.0, individual_alpha=1.0)
+    make_bigram_legend(ax, loc="upper left", fontsize=8)
     if explained_variance is not None:
         ax.set_xlabel(f"PC1 ({explained_variance[0]*100:.1f}%)")
         ax.set_ylabel(f"PC2 ({explained_variance[1]*100:.1f}%)")
@@ -1099,7 +851,6 @@ def main():
     # ── Plotting ──────────────────────────────────────────────────────────────
     plot_accuracy_curve(all_accs, suffix=f"_{tag}")
     plot_class_mean_pca(grid, class_means, pca_dirs, suffix=f"_{tag}", explained_variance=explained_variance)
-    # plot_class_mean_pca_3d(grid, class_means, pca_dirs)
 
     plot_bigram_pca(grid, sequence, activations, class_means, pca_dirs, suffix=f"_{tag}", explained_variance=explained_variance)
 

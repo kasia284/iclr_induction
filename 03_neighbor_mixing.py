@@ -6,12 +6,11 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-import einops
 
 from utils import (
-    WORDS, WORD_TO_COLOR,
     Grid, set_seed, setup_plotting, save_figure,
     plotly_pca_layout, plotly_pca_traces, save_plotly,
+    pca_2d, draw_class_mean_pca_on_ax,
 )
 
 DATA_DIR = "results/neighbor_mixing/data"
@@ -19,39 +18,10 @@ PLOTS_DIR = "results/neighbor_mixing/plots"
 D_EMBED = 4096
 
 
-def pca_2d(embeddings):
-    """Mean-center and SVD → project onto top-2 PCs. Returns [16, 2]."""
-    centered = embeddings - embeddings.mean(dim=0, keepdim=True)
-    _, _, V = torch.svd(centered)
-    directions = einops.rearrange(V, "d n -> n d")[:2, :]  # [2, d]
-    return centered @ directions.T  # [16, 2]
-
-
 def plot_pca_scatter(projected, grid, title, filename):
     """Scatter of 16 word embeddings projected onto PC1/PC2 with grid edges."""
     fig, ax = plt.subplots(figsize=(5, 5))
-
-    A = grid.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                ax.plot(
-                    [projected[i, 0].item(), projected[j, 0].item()],
-                    [projected[i, 1].item(), projected[j, 1].item()],
-                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                )
-
-    for i, word in enumerate(WORDS):
-        ax.scatter(
-            projected[i, 0].item(), projected[i, 1].item(),
-            color=WORD_TO_COLOR[word], s=120, marker="*",
-            edgecolors="black", linewidths=0.5, zorder=5,
-        )
-        ax.annotate(
-            word, (projected[i, 0].item(), projected[i, 1].item()),
-            xytext=(5, 5), textcoords="offset points", fontsize=8,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-        )
+    draw_class_mean_pca_on_ax(ax, grid, projected, is_3d=False)
 
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
@@ -69,6 +39,7 @@ def plot_pca_scatter(projected, grid, title, filename):
 
 def main():
     setup_plotting()
+    plt.rcParams['text.usetex'] = False
     grid = Grid()
 
     data_path = os.path.join(DATA_DIR, "mixing.npz")
@@ -87,14 +58,16 @@ def main():
         embeddings = torch.randn(16, D_EMBED)
 
         # Before mixing
-        proj_before = pca_2d(embeddings).numpy()
+        proj_before, _ = pca_2d(embeddings)
+        proj_before = proj_before.numpy()
 
         # After one round of neighbor mixing: e_mixed[i] = e[i] + mean(e[neighbors of i])
         neighbor_sum = A_torch @ embeddings  # [16, D_EMBED]
         degree = A_torch.sum(dim=1, keepdim=True)  # [16, 1]
         mixed = embeddings + neighbor_sum / degree
 
-        proj_after = pca_2d(mixed).numpy()
+        proj_after, _ = pca_2d(mixed)
+        proj_after = proj_after.numpy()
 
         os.makedirs(DATA_DIR, exist_ok=True)
         np.savez(data_path, proj_before=proj_before, proj_after=proj_after)

@@ -35,7 +35,6 @@ import re
 import json
 
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 import plotly.graph_objects as go
 import tqdm
@@ -46,6 +45,7 @@ from utils import (
     compute_class_means, compute_pca_directions, setup_plotting, save_figure,
     plotly_pca_layout, plotly_line_layout, plotly_pca_traces, save_plotly,
     set_square_limits,
+    draw_class_mean_pca_on_ax, draw_bigram_scatter_on_ax, make_bigram_legend,
 )
 from word_lists import WORD_LISTS
 
@@ -147,26 +147,8 @@ def plot_class_mean_pca(ring, class_means, pca_dirs, words, word_to_color, word_
     projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    A = ring.build_adjacency_matrix()
-    for i in range(len(words)):
-        for j in range(i + 1, len(words)):
-            if A[i, j]:
-                ax.plot(
-                    [projected[i, 0].item(), projected[j, 0].item()],
-                    [projected[i, 1].item(), projected[j, 1].item()],
-                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                )
-    for i, word in enumerate(words):
-        ax.scatter(
-            projected[i, 0].item(), projected[i, 1].item(),
-            color=word_to_color[word], s=120, marker="*",
-            edgecolors="black", linewidths=0.5, zorder=5,
-        )
-        ax.annotate(
-            word, (projected[i, 0].item(), projected[i, 1].item()),
-            xytext=(5, 5), textcoords="offset points", fontsize=8,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-        )
+    draw_class_mean_pca_on_ax(ax, ring, projected, words=words, word_to_color=word_to_color,
+                               marker_size=120, label_fontsize=8, label_offset=(5, 5), is_3d=False)
 
     if explained_variance is not None:
         ax.set_xlabel(f"PC1 ({explained_variance[0]*100:.1f}%)")
@@ -198,45 +180,11 @@ def plot_bigram_pca(ring, sequence, activations, class_means, pca_dirs, words, w
     projected_means = (class_means - class_means_mean) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(8, 8))
-    A = ring.build_adjacency_matrix()
-    for i in range(len(words)):
-        for j in range(i + 1, len(words)):
-            if A[i, j]:
-                ax.plot(
-                    [projected_means[i, 0].item(), projected_means[j, 0].item()],
-                    [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                )
-    for idx in range(1, len(tail)):
-        cur_word, prev_word = tail[idx], tail[idx - 1]
-        ax.scatter(
-            projected_all[idx, 0].item(), projected_all[idx, 1].item(),
-            c=word_to_color[cur_word], edgecolors=word_to_color[prev_word],
-            linewidths=1.0, s=25, alpha=1.0, zorder=3,
-        )
-    for i, word in enumerate(words):
-        ax.scatter(
-            projected_means[i, 0].item(), projected_means[i, 1].item(),
-            color=word_to_color[word], s=120, marker="*",
-            edgecolors="black", linewidths=1.0, zorder=5,
-        )
-        ax.annotate(
-            word, (projected_means[i, 0].item(), projected_means[i, 1].item()),
-            xytext=(5, 5), textcoords="offset points", fontsize=7,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-        )
-    legend_elements = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="gray",
-               markersize=8, markeredgecolor="black", markeredgewidth=1.5,
-               label="Fill = current token"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
-               markersize=8, markeredgecolor="gray", markeredgewidth=1.5,
-               label="Border = previous token"),
-        Line2D([0], [0], marker="*", color="w", markerfacecolor="gray",
-               markersize=12, markeredgecolor="black", markeredgewidth=0.8,
-               label="Token centroid"),
-    ]
-    ax.legend(handles=legend_elements, loc="upper left", frameon=True, framealpha=1.0, edgecolor="gray", fontsize=8)
+    draw_bigram_scatter_on_ax(ax, projected_all, projected_means, tail, ring,
+                               words=words, word_to_color=word_to_color,
+                               marker_size=120, label_fontsize=7,
+                               individual_size=25, individual_linewidth=1.0, individual_alpha=1.0)
+    make_bigram_legend(ax, loc="upper left", fontsize=8)
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
     set_square_limits(ax, projected_all[:, 0], projected_all[:, 1])

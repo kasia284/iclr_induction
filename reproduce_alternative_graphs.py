@@ -19,6 +19,7 @@ from utils import (
     set_seed, load_model, get_model_accuracies, get_activations,
     compute_class_means, compute_pca_directions, setup_plotting, save_figure,
     smooth, plotly_pca_layout, plotly_line_layout, plotly_pca_traces, save_plotly,
+    draw_class_mean_pca_on_ax,
 )
 
 DATA_DIR = "results/alternative/data"
@@ -157,19 +158,7 @@ def plot_class_mean_pca(graph, class_means, pca_dirs, graph_name):
     projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    A = graph.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                ax.plot(
-                    [projected[i, 0].item(), projected[j, 0].item()],
-                    [projected[i, 1].item(), projected[j, 1].item()],
-                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                )
-
-    for i, word in enumerate(WORDS):
-        ax.scatter(projected[i, 0].item(), projected[i, 1].item(), color=WORD_TO_COLOR[word], s=120, marker="*", edgecolors="black", linewidths=0.5, zorder=5)
-        ax.annotate(word, (projected[i, 0].item(), projected[i, 1].item()), xytext=(5, 5), textcoords="offset points", fontsize=8, bbox=dict(facecolor="white", edgecolor="none", alpha=0.7))
+    draw_class_mean_pca_on_ax(ax, graph, projected, is_3d=False)
 
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")

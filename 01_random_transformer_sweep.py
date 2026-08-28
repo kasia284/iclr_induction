@@ -2,13 +2,12 @@ import math
 import functools
 
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 from utils import (
     WORDS, LAYER, WORD_TO_COLOR,
     Grid, set_seed, load_toy_model, get_activations_toy_batch,
     compute_class_means_batch, compute_pca_directions, setup_plotting, save_figure,
-    set_square_limits,
+    set_square_limits, draw_class_mean_pca_on_ax, draw_bigram_scatter_on_ax, make_bigram_legend,
 )
 
 LAYER = 0
@@ -36,27 +35,8 @@ def draw_class_mean_on_ax(ax, grid, class_means, pca_dirs, explained_var, title=
     """Scatter of class-mean centroids with grid edges on a specific ax."""
     projected = (class_means - class_means.mean(axis=0, keepdims=True)) @ pca_dirs.T
 
-    A = grid.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                ax.plot(
-                    [projected[i, 0].item(), projected[j, 0].item()],
-                    [projected[i, 1].item(), projected[j, 1].item()],
-                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                )
-
-    for i, word in enumerate(WORDS):
-        ax.scatter(
-            projected[i, 0].item(), projected[i, 1].item(),
-            color=WORD_TO_COLOR[word], s=80, marker="*",
-            edgecolors="black", linewidths=0.5, zorder=5,
-        )
-        ax.annotate(
-            word, (projected[i, 0].item(), projected[i, 1].item()),
-            xytext=(3, 3), textcoords="offset points", fontsize=6,
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-        )
+    draw_class_mean_pca_on_ax(ax, grid, projected, marker_size=80, label_fontsize=6,
+                               label_offset=(3, 3), is_3d=False)
 
     ax.set_title(
         f"{title}\nPC1 {explained_var[0]*100:.1f}% | PC2 {explained_var[1]*100:.1f}%",
@@ -74,36 +54,15 @@ def draw_bigram_on_ax(ax, grid, sequences, activations, class_means, pca_dirs, e
     projected_all = (activations - class_means_mean) @ pca_dirs.T
     projected_means = (class_means - class_means_mean) @ pca_dirs.T
 
-    A = grid.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                ax.plot(
-                    [projected_means[i, 0].item(), projected_means[j, 0].item()],
-                    [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                )
-
-    # Individual sequence tokens
+    # Grid edges + individual sequence tokens (fill=current, border=previous)
+    # + class-mean centroid overlay, no labels. Edges/centroids get redrawn
+    # once per sequence (harmless -- same lines/points land in the same
+    # place each time) since the shared primitive draws all three together.
     for b in range(len(sequences)):
         tail = sequences[b][-N_LOOKBACK:]
-        for idx in range(1, len(tail)):
-            cur_word = tail[idx]
-            prev_word = tail[idx - 1]
-            ax.scatter(
-                projected_all[b, idx, 0].item(), projected_all[b, idx, 1].item(),
-                c=WORD_TO_COLOR[cur_word],
-                edgecolors=WORD_TO_COLOR[prev_word],
-                linewidths=0.8, s=15, alpha=0.9, zorder=3,
-            )
-
-    # Class means overlay
-    for i, word in enumerate(WORDS):
-        ax.scatter(
-            projected_means[i, 0].item(), projected_means[i, 1].item(),
-            color=WORD_TO_COLOR[word], s=80, marker="*",
-            edgecolors="black", linewidths=1.0, zorder=5,
-        )
+        draw_bigram_scatter_on_ax(ax, projected_all[b], projected_means, tail, grid,
+                                   label=False, marker_size=80,
+                                   individual_size=15, individual_linewidth=0.8, individual_alpha=0.9)
 
     ax.set_title(
         f"{title}\nPC1 {explained_var[0]*100:.1f}% | PC2 {explained_var[1]*100:.1f}%",
@@ -125,19 +84,7 @@ def draw_bigram_on_ax(ax, grid, sequences, activations, class_means, pca_dirs, e
 
 def add_bigram_legend(fig):
     """Adds a single global legend to the bigram figure."""
-    legend_elements = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="gray",
-               markersize=8, markeredgecolor="black", markeredgewidth=1.5,
-               label="Fill = current token"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
-               markersize=8, markeredgecolor="gray", markeredgewidth=1.5,
-               label="Border = previous token"),
-        Line2D([0], [0], marker="*", color="w", markerfacecolor="gray",
-               markersize=12, markeredgecolor="black", markeredgewidth=0.8,
-               label="Token centroid"),
-    ]
-    fig.legend(handles=legend_elements, loc="upper right", frameon=True,
-               framealpha=1.0, edgecolor="gray", fontsize=10)
+    make_bigram_legend(fig, loc="upper right", fontsize=10)
 
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────

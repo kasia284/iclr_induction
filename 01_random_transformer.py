@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import plotly.graph_objects as go
 
 from utils import (
@@ -8,7 +7,7 @@ from utils import (
     Grid, Torus, set_seed, load_toy_model, get_activations_toy_batch,
     compute_class_means_batch, compute_pca_directions, setup_plotting, save_figure,
     plotly_pca_layout, plotly_pca_traces, save_plotly, plot_attention_heatmaps,
-    set_square_limits,
+    set_square_limits, draw_class_mean_pca_on_ax, draw_bigram_scatter_on_ax, make_bigram_legend,
 )
 
 from word_lists import WORD_LISTS
@@ -37,49 +36,9 @@ def plot_class_mean_pca(graph, class_means, pca_dirs, explained_var, hp_str="", 
     else:
         fig, ax = plt.subplots(figsize=(5, 5))
 
-    # Grid edges (gray dashed)
-    A = graph.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                if is_3d:
-                    ax.plot(
-                        [projected[i, 0].item(), projected[j, 0].item()],
-                        [projected[i, 1].item(), projected[j, 1].item()],
-                        [projected[i, 2].item(), projected[j, 2].item()],
-                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                    )
-                else:
-                    ax.plot(
-                        [projected[i, 0].item(), projected[j, 0].item()],
-                        [projected[i, 1].item(), projected[j, 1].item()],
-                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                    )
-
-    # Scatter + labels
-    for i, word in enumerate(WORDS):
-        if is_3d:
-            ax.scatter(
-                projected[i, 0].item(), projected[i, 1].item(), projected[i, 2].item(),
-                color=WORD_TO_COLOR[word], s=120, marker="*",
-                edgecolors="black", linewidths=0.5, zorder=5,
-            )
-            ax.text(
-                projected[i, 0].item(), projected[i, 1].item(), projected[i, 2].item(),
-                word, fontsize=8,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-            )
-        else:
-            ax.scatter(
-                projected[i, 0].item(), projected[i, 1].item(),
-                color=WORD_TO_COLOR[word], s=120, marker="*",
-                edgecolors="black", linewidths=0.5, zorder=5,
-            )
-            ax.annotate(
-                word, (projected[i, 0].item(), projected[i, 1].item()),
-                xytext=(5, 5), textcoords="offset points", fontsize=8,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-            )
+    # Grid edges (gray dashed) + star centroid markers + word labels.
+    draw_class_mean_pca_on_ax(ax, graph, projected, words=WORDS, word_to_color=WORD_TO_COLOR,
+                               marker_size=120, label_fontsize=8, label_offset=(5, 5), is_3d=is_3d)
 
     # Update labels to include explained variance
     ax.set_xlabel(f"PC1 ({explained_var[0]*100:.1f}%)")
@@ -108,91 +67,6 @@ def plot_class_mean_pca(graph, class_means, pca_dirs, explained_var, hp_str="", 
 
 # ── Fig 6: Bigram PCA ─────────────────────────────────────────────────────────
 
-def _draw_bigram_scatter(ax, projected_all, projected_means, tail, graph, label=True):
-    """Draw bigram scatter on a given axes. Shared by main plot and inset.
-    Supports 2D and 3D, depending on the projected dimensionality."""
-    is_3d = (projected_means.shape[1] == 3)
-
-    A = graph.build_adjacency_matrix()
-    for i in range(len(WORDS)):
-        for j in range(i + 1, len(WORDS)):
-            if A[i, j]:
-                if is_3d:
-                    ax.plot(
-                        [projected_means[i, 0].item(), projected_means[j, 0].item()],
-                        [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                        [projected_means[i, 2].item(), projected_means[j, 2].item()],
-                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                    )
-                else:
-                    ax.plot(
-                        [projected_means[i, 0].item(), projected_means[j, 0].item()],
-                        [projected_means[i, 1].item(), projected_means[j, 1].item()],
-                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
-                    )
-
-    for idx in range(1, len(tail)):
-        cur_word = tail[idx]
-        prev_word = tail[idx - 1]
-        if is_3d:
-            ax.scatter(
-                projected_all[idx, 0].item(), projected_all[idx, 1].item(), projected_all[idx, 2].item(),
-                c=WORD_TO_COLOR[cur_word],
-                edgecolors=WORD_TO_COLOR[prev_word],
-                linewidths=1.0, s=25, alpha=1.0, zorder=3,
-            )
-        else:
-            ax.scatter(
-                projected_all[idx, 0].item(), projected_all[idx, 1].item(),
-                c=WORD_TO_COLOR[cur_word],
-                edgecolors=WORD_TO_COLOR[prev_word],
-                linewidths=1.0, s=25, alpha=1.0, zorder=3,
-            )
-
-    for i, word in enumerate(WORDS):
-        if is_3d:
-            ax.scatter(
-                projected_means[i, 0].item(), projected_means[i, 1].item(), projected_means[i, 2].item(),
-                color=WORD_TO_COLOR[word], s=120, marker="*",
-                edgecolors="black", linewidths=1.0, zorder=5,
-            )
-            if label:
-                ax.text(
-                    projected_means[i, 0].item(), projected_means[i, 1].item(), projected_means[i, 2].item(),
-                    word, fontsize=7,
-                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-                )
-        else:
-            ax.scatter(
-                projected_means[i, 0].item(), projected_means[i, 1].item(),
-                color=WORD_TO_COLOR[word], s=120, marker="*",
-                edgecolors="black", linewidths=1.0, zorder=5,
-            )
-            if label:
-                ax.annotate(
-                    word, (projected_means[i, 0].item(), projected_means[i, 1].item()),
-                    xytext=(5, 5), textcoords="offset points", fontsize=7,
-                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.7),
-                )
-
-
-def _make_bigram_legend(ax):
-    """Add legend for bigram PCA plots."""
-    legend_elements = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="gray",
-               markersize=8, markeredgecolor="black", markeredgewidth=1.5,
-               label="Fill = current token"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
-               markersize=8, markeredgecolor="gray", markeredgewidth=1.5,
-               label="Border = previous token"),
-        Line2D([0], [0], marker="*", color="w", markerfacecolor="gray",
-               markersize=12, markeredgecolor="black", markeredgewidth=0.8,
-               label="Token centroid"),
-    ]
-    ax.legend(handles=legend_elements, loc="upper left", frameon=True,
-              framealpha=1.0, edgecolor="gray", fontsize=8)
-    
-
 def plot_bigram_pca(graph, sequences, activations, class_means, pca_dirs, explained_var, hp_str="", hp_title=""):
     """Individual activations colored by (current token, previous token) for a
     batch of sequences. Supports 2D and 3D, depending on how many PCA
@@ -211,9 +85,12 @@ def plot_bigram_pca(graph, sequences, activations, class_means, pca_dirs, explai
 
     for b in range(len(sequences)):
         tail = sequences[b][-N_LOOKBACK:]
-        _draw_bigram_scatter(ax, projected_all[b], projected_means, tail, graph)
+        draw_bigram_scatter_on_ax(ax, projected_all[b], projected_means, tail, graph,
+                                   words=WORDS, word_to_color=WORD_TO_COLOR,
+                                   marker_size=120, label_fontsize=7,
+                                   individual_size=25, individual_linewidth=1.0, individual_alpha=1.0)
 
-    _make_bigram_legend(ax)
+    make_bigram_legend(ax, loc="upper left", fontsize=8)
 
     # Update labels to include explained variance
     ax.set_xlabel(f"PC1 ({explained_var[0]*100:.1f}%)")

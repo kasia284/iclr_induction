@@ -7,6 +7,8 @@ import functools
 
 from matplotlib.colors import LogNorm
 import matplotlib.colors as mcolors
+from matplotlib.lines import Line2D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -638,6 +640,176 @@ def set_square_limits(ax, xs, ys, pad_frac=0.15):
     half_span = max(x_max - x_min, y_max - y_min, 1e-6) / 2 * (1 + pad_frac)
     ax.set_xlim(x_center - half_span, x_center + half_span)
     ax.set_ylim(y_center - half_span, y_center + half_span)
+
+
+# ── Shared PCA-scatter plotting primitives ──────────────────────────────────────
+#
+# Every *_pca-plotting script in this repo used to hand-roll its own copy of
+# "scatter class-mean centroids with dashed grid edges" and "scatter
+# individual bigram-colored activations", with real (not just cosmetic)
+# drift between copies -- different marker sizes, label offsets, whether
+# explained variance was shown, whether 2D vs 3D was supported, etc. These
+# primitives factor out the actual drawing loops (parametrized so each
+# caller can reproduce its own prior exact styling) while leaving
+# title/axis-label/save/filename decisions -- which genuinely vary by
+# caller -- to the caller itself.
+
+def pca_2d(embeddings, top_n=2):
+    """Mean-center + PCA (via compute_pca_directions) + project onto the top
+    `top_n` components. embeddings: torch.Tensor [n, d]. Returns
+    (projected [n, top_n] torch.Tensor, explained_variance [top_n] np.ndarray).
+    """
+    pca_dirs, explained_variance = compute_pca_directions(embeddings, top_n=top_n)
+    centered = embeddings - embeddings.mean(dim=0, keepdim=True)
+    projected = centered @ pca_dirs.T
+    return projected, explained_variance
+
+
+def _scalar(v):
+    """torch.Tensor/np.ndarray 0-d element or plain float/int -> Python float."""
+    return v.item() if hasattr(v, "item") else v
+
+
+def draw_class_mean_pca_on_ax(ax, grid, projected, words=None, word_to_color=None,
+                               marker_size=120, label_fontsize=8, label_offset=(5, 5),
+                               is_3d=None):
+    """Core rendering primitive shared by every plot_class_mean_pca-style
+    function: dashed grid edges + star centroid markers + word-label
+    annotations, drawn onto an existing (2D or 3D) Axes. Does NOT set axis
+    labels/limits/aspect/title or save anything -- callers vary on those.
+
+    projected: [n_words, 2 or 3] array-like, already PCA-projected.
+    words/word_to_color default to the module-level WORDS/WORD_TO_COLOR.
+    is_3d: inferred from projected's shape if not given explicitly.
+    """
+    if words is None:
+        words = WORDS
+    if word_to_color is None:
+        word_to_color = WORD_TO_COLOR
+    if is_3d is None:
+        is_3d = (np.asarray(projected).shape[1] == 3)
+
+    A = grid.build_adjacency_matrix()
+    for i in range(len(words)):
+        for j in range(i + 1, len(words)):
+            if A[i, j]:
+                if is_3d:
+                    ax.plot(
+                        [_scalar(projected[i, 0]), _scalar(projected[j, 0])],
+                        [_scalar(projected[i, 1]), _scalar(projected[j, 1])],
+                        [_scalar(projected[i, 2]), _scalar(projected[j, 2])],
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
+                    )
+                else:
+                    ax.plot(
+                        [_scalar(projected[i, 0]), _scalar(projected[j, 0])],
+                        [_scalar(projected[i, 1]), _scalar(projected[j, 1])],
+                        color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
+                    )
+
+    for i, word in enumerate(words):
+        if is_3d:
+            x, y, z = _scalar(projected[i, 0]), _scalar(projected[i, 1]), _scalar(projected[i, 2])
+            ax.scatter(x, y, z, color=word_to_color[word], s=marker_size, marker="*",
+                       edgecolors="black", linewidths=0.5, zorder=5)
+            ax.text(x, y, z, word, fontsize=label_fontsize,
+                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.7))
+        else:
+            x, y = _scalar(projected[i, 0]), _scalar(projected[i, 1])
+            ax.scatter(x, y, color=word_to_color[word], s=marker_size, marker="*",
+                       edgecolors="black", linewidths=0.5, zorder=5)
+            ax.annotate(word, (x, y), xytext=label_offset, textcoords="offset points",
+                        fontsize=label_fontsize,
+                        bbox=dict(facecolor="white", edgecolor="none", alpha=0.7))
+
+
+def add_pca_grid_faces_3d(ax, grid, words, projected):
+    """Translucent grey face for each grid cell, in a 3D PCA scatter (2
+    triangles per quad via Poly3DCollection). words/projected must be in
+    the same order; projected: [n_words, 3]."""
+    word_to_idx = {w: i for i, w in enumerate(words)}
+    is_torus = type(grid).__name__ == "Torus"
+    r_range = range(grid.rows) if is_torus else range(grid.rows - 1)
+    c_range = range(grid.cols) if is_torus else range(grid.cols - 1)
+    faces = []
+    for r in r_range:
+        for c in c_range:
+            r2, c2 = (r + 1) % grid.rows, (c + 1) % grid.cols
+            corners = [grid.grid[r][c], grid.grid[r][c2], grid.grid[r2][c2], grid.grid[r2][c]]
+            idxs = [word_to_idx[w] for w in corners]
+            faces.append([projected[i, :3].tolist() for i in idxs])
+    if faces:
+        ax.add_collection3d(Poly3DCollection(
+            faces, facecolor=(0.6, 0.6, 0.6, 0.4),
+            edgecolor=(0.4, 0.4, 0.4, 0.6), linewidths=0.5,
+        ))
+
+
+def draw_bigram_scatter_on_ax(ax, projected_all, projected_means, tail, grid,
+                               words=None, word_to_color=None, label=True,
+                               marker_size=120, label_fontsize=7,
+                               individual_size=25, individual_linewidth=1.0, individual_alpha=1.0):
+    """Core rendering primitive shared by every plot_bigram_pca-style
+    function: dashed grid edges (from projected_means) + individual
+    per-position points colored by (fill = current token, border = previous
+    token) + centroid star markers, optionally word-labeled. Does NOT set
+    axis labels/limits/aspect/title, add a legend, or save -- callers vary.
+
+    projected_all: [len(tail), 2] (or [seq_len, 2], indexed by `tail`'s own
+    indices). projected_means: [n_words, 2]. words/word_to_color default to
+    the module-level WORDS/WORD_TO_COLOR.
+    """
+    if words is None:
+        words = WORDS
+    if word_to_color is None:
+        word_to_color = WORD_TO_COLOR
+
+    A = grid.build_adjacency_matrix()
+    for i in range(len(words)):
+        for j in range(i + 1, len(words)):
+            if A[i, j]:
+                ax.plot(
+                    [_scalar(projected_means[i, 0]), _scalar(projected_means[j, 0])],
+                    [_scalar(projected_means[i, 1]), _scalar(projected_means[j, 1])],
+                    color="dimgray", alpha=0.7, linestyle="--", linewidth=0.8,
+                )
+
+    for idx in range(1, len(tail)):
+        cur_word = tail[idx]
+        prev_word = tail[idx - 1]
+        ax.scatter(
+            _scalar(projected_all[idx, 0]), _scalar(projected_all[idx, 1]),
+            c=word_to_color[cur_word], edgecolors=word_to_color[prev_word],
+            linewidths=individual_linewidth, s=individual_size, alpha=individual_alpha, zorder=3,
+        )
+
+    for i, word in enumerate(words):
+        x, y = _scalar(projected_means[i, 0]), _scalar(projected_means[i, 1])
+        ax.scatter(x, y, color=word_to_color[word], s=marker_size, marker="*",
+                   edgecolors="black", linewidths=1.0, zorder=5)
+        if label:
+            ax.annotate(word, (x, y), xytext=(5, 5), textcoords="offset points",
+                        fontsize=label_fontsize,
+                        bbox=dict(facecolor="white", edgecolor="none", alpha=0.7))
+
+
+def make_bigram_legend(target, loc="upper left", fontsize=8):
+    """Adds the standard fill=current/border=previous/star=centroid legend
+    to a matplotlib Axes or Figure (pass target=fig with loc='upper right'
+    for the batch-sweep scripts' single shared-legend convention)."""
+    legend_elements = [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="gray",
+               markersize=8, markeredgecolor="black", markeredgewidth=1.5,
+               label="Fill = current token"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
+               markersize=8, markeredgecolor="gray", markeredgewidth=1.5,
+               label="Border = previous token"),
+        Line2D([0], [0], marker="*", color="w", markerfacecolor="gray",
+               markersize=12, markeredgecolor="black", markeredgewidth=0.8,
+               label="Token centroid"),
+    ]
+    target.legend(handles=legend_elements, loc=loc, frameon=True,
+                  framealpha=1.0, edgecolor="gray", fontsize=fontsize)
 
 
 # ── Ablation hooks ─────────────────────────────────────────────────────────────
