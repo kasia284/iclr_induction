@@ -88,7 +88,7 @@ def main():
     plt.rcParams['text.usetex'] = False
     grid = Grid()
 
-    data_path = os.path.join(DATA_DIR, "mixing.npz")
+    data_path = os.path.join(DATA_DIR, "mixing_extended_fve.npz")
 
     A = grid.build_adjacency_matrix()
     A_torch = torch.tensor(A, dtype=torch.float32)
@@ -135,19 +135,19 @@ def main():
     # ── Plotting ──────────────────────────────────────────────────────────────
     plot_pca_scatter(
         proj_before, var_before, grid,
-        "Random embeddings\n(no neighbor mixing)", "before_mixing.pdf"
+        "Random embeddings\n(no neighbor mixing)", "before_mixing_extended_fve.pdf"
     )
     plot_pca_scatter(
         proj_after, var_after, grid,
-        "Random embeddings\n(after one round of neighbor mixing)", "after_mixing.pdf"
+        "Random embeddings\n(after one round of neighbor mixing)", "after_mixing_extended_fve.pdf"
     )
     plot_pca_scatter(
         proj_after_2, var_after_2, grid,
-        "Random embeddings\n(after two rounds of neighbor mixing)", "after_2_mixing.pdf"
+        "Random embeddings\n(after two rounds of neighbor mixing)", "after_2_mixing_extended_fve.pdf"
     )
     plot_pca_scatter(
         proj_after_3, var_after_3, grid,
-        "Random embeddings\n(after three rounds of neighbor mixing)", "after_3_mixing.pdf"
+        "Random embeddings\n(after three rounds of neighbor mixing)", "after_3_mixing_extended_fve.pdf"
     )
 
 
