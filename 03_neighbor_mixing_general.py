@@ -5,14 +5,38 @@ Starting-vector sources (--source):
   - random:    independent random Gaussian vectors, no relationship to any
                graph (utils.set_seed-seeded torch.randn). Same as the
                original 03_neighbor_mixing.py.
-  - synthetic: points lying EXACTLY on the graph's own natural low-
-               dimensional layout (Grid/Torus: (row, col); Ring: (cos, sin)
-               unit-circle position), lifted into R^d_embed via a random
-               orthonormal basis -- so PCA on these, before any mixing,
-               recovers the graph's natural shape exactly. Generalizes
+  - synthetic: points lying on the graph's own natural low-dimensional
+               layout (Grid/Torus: (row, col); Ring: (cos, sin) unit-circle
+               position), lifted into R^d_embed via a random orthonormal
+               basis -- so PCA on these, before any mixing, recovers the
+               graph's natural shape exactly. Generalizes the former
                03_neighbor_mixing_synthetic_grid_permuted.py /
-               -synthetic_grid_transformed.py's construction to any graph
-               type exposing word_to_row/word_to_col (not just Grid).
+               -synthetic_grid_transformed.py scripts (since folded into
+               this one) to any graph type exposing word_to_row/word_to_col
+               (not just Grid). Two optional knobs, both --graph-agnostic:
+                 --rotate-degrees / --stretch / --translate: an explicit 2D
+                   affine transform applied to the natural coordinates
+                   BEFORE lifting into R^d_embed. Of the three, only
+                   --stretch (anisotropic scale) actually survives into the
+                   post-mixing PCA plot -- rotate is indistinguishable from
+                   lifting through a differently-random basis, and
+                   translate is canceled by mean-centering (both mixing's
+                   and PCA's) -- kept as independent, explicit knobs anyway
+                   so this stays a general "build a synthetic grid under
+                   any affine map" tool rather than assuming that asymmetry.
+                 --permute: shuffles WHICH natural-coordinate point sits at
+                   WHICH graph node (a diagonal-Latin-square shuffle, same
+                   algorithm used to build every `*_permuted` list in
+                   word_lists.py), while the graph's own adjacency stays
+                   the standard, unpermuted one -- so graph-adjacent nodes
+                   are (almost) never true geometric neighbors, and mixing
+                   repeatedly averages together geometrically unrelated
+                   points. Plot labels still show each point's TRUE
+                   identity (not the graph node it happens to sit on), so
+                   you can see e.g. whether mixing pulls the true shape
+                   back together or scrambles it further. Requires a
+                   perfect-square word count (same constraint diagonal
+                   shuffling always had).
   - llm:       static (context-free) token embeddings read directly out of
                an LLM's W_E matrix -- no forward pass, CPU-only (reads the
                local safetensors shard directly via real-embeddings-
@@ -59,6 +83,8 @@ Usage:
     python 03_neighbor_mixing_general.py --source llm --graph ring --rounds 1 2 3 10 30 --dims 2 3
     python 03_neighbor_mixing_general.py --source synthetic --graph torus --words two_digit_numbers
     python 03_neighbor_mixing_general.py --source llm --normalization rmsnorm --rounds 1 5 20
+    python 03_neighbor_mixing_general.py --source synthetic --permute --rounds 1 2 3 10 20 30 50 100
+    python 03_neighbor_mixing_general.py --source synthetic --permute --stretch 2.5 1.0 --rotate-degrees 30 --translate 5 -3
 
 Or call run_neighbor_mixing_experiment(...) directly from another script.
 """
@@ -99,15 +125,57 @@ def random_embeddings(words, d_embed=D_EMBED, seed=42):
     return torch.randn(len(words), d_embed)
 
 
-def synthetic_grid_embeddings(graph, words, d_embed=D_EMBED, seed=42):
-    """Points lying exactly on the graph's own natural low-dim coordinate
-    layout (word_to_row/word_to_col -- (row, col) for Grid/Torus, (cos, sin)
-    for Ring), lifted into R^d_embed via a random orthonormal 2D basis.
-    Works for any graph exposing word_to_row/word_to_col."""
+def transform_2d(points, rotate_degrees=0.0, stretch=(1.0, 1.0), translate=(0.0, 0.0)):
+    """Applies, in order: anisotropic scale -> rotation -> translation.
+    points: [N, 2]. Returns [N, 2]. Of the three, only `stretch` actually
+    changes the post-mixing PCA geometry -- see module docstring."""
+    sx, sy = stretch
+    scaled = points * torch.tensor([sx, sy], dtype=torch.float32)
+
+    theta = math.radians(rotate_degrees)
+    rot = torch.tensor([
+        [math.cos(theta), -math.sin(theta)],
+        [math.sin(theta), math.cos(theta)],
+    ], dtype=torch.float32)
+    rotated = scaled @ rot.T
+
+    return rotated + torch.tensor(translate, dtype=torch.float32)
+
+
+def diagonal_permute(indices):
+    """Diagonal-Latin-square shuffle: reads an n x n grid (row-major) along
+    rotating diagonals -- same algorithm used to build every `*_permuted`
+    list in word_lists.py. Consecutive outputs are never same-row or
+    same-column in the input, so grid-adjacent entries in the output were
+    (almost) never grid-adjacent in the input. `indices` must have a
+    perfect-square length."""
+    n = math.isqrt(len(indices))
+    if n * n != len(indices):
+        raise ValueError(f"--permute needs a perfect-square word count, got {len(indices)}.")
+    out = []
+    for d in range(n):
+        for k in range(n):
+            r = (d + k) % n
+            c = (r + d) % n
+            out.append(indices[r * n + c])
+    return out
+
+
+def synthetic_grid_embeddings(graph, words, d_embed=D_EMBED, seed=42,
+                               rotate_degrees=0.0, stretch=(1.0, 1.0), translate=(0.0, 0.0)):
+    """Points lying on the graph's own natural low-dim coordinate layout
+    (word_to_row/word_to_col -- (row, col) for Grid/Torus, (cos, sin) for
+    Ring), optionally transformed by an explicit 2D affine map, then lifted
+    into R^d_embed via a random orthonormal 2D basis. Works for any graph
+    exposing word_to_row/word_to_col. Returned rows are in `words` order
+    (i.e. row i is word i's NATURAL point, unpermuted -- see `permute` in
+    run_neighbor_mixing_experiment for scrambling which point sits at
+    which graph node)."""
     coords = torch.tensor(
         [[graph.word_to_row[w], graph.word_to_col[w]] for w in words], dtype=torch.float32
     )
     coords = coords - coords.mean(dim=0, keepdim=True)
+    coords = transform_2d(coords, rotate_degrees=rotate_degrees, stretch=stretch, translate=translate)
     set_seed(seed)
     raw = torch.randn(d_embed, 2)
     basis, _ = torch.linalg.qr(raw)  # [d_embed, 2], orthonormal columns
@@ -204,7 +272,15 @@ def plot_round(graph, embeddings, words, word_to_color, round_num, top_n, plots_
     """One PCA scatter (2D or 3D, per top_n) of `embeddings` at a given
     mixing round, ALWAYS labeled with each PC's fraction of variance
     explained. Saves a static PDF (+ interactive Plotly HTML for the 2D
-    case). Returns the explained-variance array."""
+    case). Returns the explained-variance array.
+
+    `words` is the DISPLAY label for each row of `embeddings`/`projected`
+    (row i is whatever the caller says sits at graph node i -- may differ
+    from graph.words when the caller permuted which point sits at which
+    node; see run_neighbor_mixing_experiment's permute option). Grid-face
+    rendering (add_pca_grid_faces_3d) needs the graph's own STRUCTURAL
+    word list instead (graph.grid[r][c] is always drawn from graph.words,
+    never from a caller's relabeling), so that's looked up separately."""
     projected_t, var = pca_2d(embeddings, top_n=top_n)
     projected = projected_t.numpy()
     is_3d = (top_n == 3)
@@ -219,7 +295,7 @@ def plot_round(graph, embeddings, words, word_to_color, round_num, top_n, plots_
     # add_pca_grid_faces_3d needs a 2D (rows x cols) layout -- Grid/Torus
     # have one, Ring doesn't, so skip gracefully for graphs without it.
     if is_3d and hasattr(graph, "rows") and hasattr(graph, "grid"):
-        add_pca_grid_faces_3d(ax, graph, words, projected)
+        add_pca_grid_faces_3d(ax, graph, graph.words, projected)
 
     # Always report FVE on the axes -- this is the whole point of this
     # script vs. the older 03_neighbor_mixing*.py variants that sometimes
@@ -259,7 +335,8 @@ def plot_round(graph, embeddings, words, word_to_color, round_num, top_n, plots_
 
 def run_neighbor_mixing_experiment(source="random", graph_type="grid", rounds=(1, 2, 3, 10),
                                     dims=(2,), words=None, seed=42, d_embed=D_EMBED,
-                                    normalization="none"):
+                                    normalization="none", permute=False,
+                                    rotate_degrees=0.0, stretch=(1.0, 1.0), translate=(0.0, 0.0)):
     """Runs one full neighbor-mixing sweep and produces the plots. Returns
     {(round_num, top_n): explained_variance} for programmatic use.
 
@@ -271,11 +348,19 @@ def run_neighbor_mixing_experiment(source="random", graph_type="grid", rounds=(1
     normalization: "none" | "layernorm" | "rmsnorm" | "layernorm_unit_sphere" --
         applied to the neighbor-read each round (never to the accumulated
         state), see module docstring.
+    permute / rotate_degrees / stretch / translate: source="synthetic" only
+        (ValueError otherwise if non-default) -- see module docstring.
+        permute scrambles which natural point sits at which graph node
+        (graph adjacency stays unpermuted); plot labels still show each
+        point's TRUE identity.
     """
     if words is None:
         words = WORDS
     if normalization not in NORMALIZATIONS:
         raise ValueError(f"Unknown normalization: {normalization!r} (choices: {list(NORMALIZATIONS)})")
+    transform_is_default = (rotate_degrees == 0.0 and tuple(stretch) == (1.0, 1.0) and tuple(translate) == (0.0, 0.0))
+    if source != "synthetic" and (permute or not transform_is_default):
+        raise ValueError("permute/rotate_degrees/stretch/translate only apply to source='synthetic'.")
 
     graph = build_graph(graph_type, words)
     word_to_color = build_word_to_color(words)
@@ -283,22 +368,41 @@ def run_neighbor_mixing_experiment(source="random", graph_type="grid", rounds=(1
 
     if source == "random":
         embeddings = random_embeddings(words, d_embed=d_embed, seed=seed)
+        plot_words = words
     elif source == "synthetic":
-        embeddings = synthetic_grid_embeddings(graph, words, d_embed=d_embed, seed=seed)
+        embeddings = synthetic_grid_embeddings(graph, words, d_embed=d_embed, seed=seed,
+                                                rotate_degrees=rotate_degrees, stretch=stretch, translate=translate)
+        if permute:
+            order = diagonal_permute(list(range(len(words))))
+            embeddings = embeddings[order]
+            # Graph adjacency stays keyed to the ORIGINAL (unpermuted) node
+            # order; only the label shown at each node changes, to whatever
+            # point's TRUE identity actually ended up sitting there.
+            plot_words = [words[i] for i in order]
+        else:
+            plot_words = words
     elif source == "llm":
         embeddings = llm_embeddings(words)
+        plot_words = words
     else:
         raise ValueError(f"Unknown source: {source!r}")
 
     normalize_fn = NORMALIZATIONS[normalization]
     embs_by_round = run_mixing_rounds(embeddings, adjacency, rounds, normalize_fn=normalize_fn)
-    tag = f"{source}_{graph_type}" if normalization == "none" else f"{source}_{graph_type}_{normalization}"
+
+    tag = f"{source}_{graph_type}"
+    if normalization != "none":
+        tag += f"_{normalization}"
+    if permute:
+        tag += "_permuted"
+    if not transform_is_default:
+        tag += "_transformed"
     plots_dir = os.path.join(PLOTS_DIR, tag)
 
     results = {}
     for round_num in sorted(embs_by_round):
         for top_n in dims:
-            var = plot_round(graph, embs_by_round[round_num], words, word_to_color,
+            var = plot_round(graph, embs_by_round[round_num], plot_words, word_to_color,
                               round_num, top_n, plots_dir, tag)
             results[(round_num, top_n)] = var
             print(f"  round {round_num:3d}, {top_n}D PCA: FVE = "
@@ -322,6 +426,20 @@ def main():
     parser.add_argument("--normalization", choices=list(NORMALIZATIONS), default="none",
                         help="Normalization applied to the neighbor-read each round "
                              "(never to the accumulated state). Default: none.")
+    parser.add_argument("--permute", action="store_true",
+                        help="source='synthetic' only: shuffle which natural point sits at "
+                             "which graph node (diagonal-Latin-square shuffle); graph adjacency "
+                             "stays unpermuted. Requires a perfect-square word count.")
+    parser.add_argument("--rotate-degrees", type=float, default=0.0,
+                        help="source='synthetic' only: rotate the natural 2D coordinates before "
+                             "lifting (has no visible effect after mixing+PCA, kept for generality).")
+    parser.add_argument("--stretch", type=float, nargs=2, default=[1.0, 1.0], metavar=("SX", "SY"),
+                        help="source='synthetic' only: anisotropic scale of the natural 2D "
+                             "coordinates before lifting -- the only affine knob that's visible "
+                             "in the post-mixing PCA plot.")
+    parser.add_argument("--translate", type=float, nargs=2, default=[0.0, 0.0], metavar=("TX", "TY"),
+                        help="source='synthetic' only: translate the natural 2D coordinates before "
+                             "lifting (has no visible effect after mixing+PCA, kept for generality).")
     parser.add_argument("--words", type=str, default=None,
                         help="word_lists.WORD_LISTS key (defaults to utils.WORDS, "
                              "a 16-word 4x4-compatible list).")
@@ -340,6 +458,8 @@ def main():
     run_neighbor_mixing_experiment(
         source=args.source, graph_type=args.graph, rounds=args.rounds,
         dims=args.dims, words=words, seed=args.seed, normalization=args.normalization,
+        permute=args.permute, rotate_degrees=args.rotate_degrees,
+        stretch=tuple(args.stretch), translate=tuple(args.translate),
     )
 
 
