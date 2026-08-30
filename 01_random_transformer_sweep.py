@@ -94,11 +94,11 @@ def main():
     plt.rcParams['text.usetex'] = False
     grid = Grid()
 
-    batch_sizes = [1, 4, 16, 64, 256]
-    seq_lens = [4, 16, 64, 256]
+    batch_sizes = [1, 4, 16, 64]
+    seq_lens = [64, 256, 1024]
     seed = 42
     # None or "LNPre" or "RMSPre" or "layer_norm_normalized" or "scaled_embed_sqrt_d"
-    NORMALIZATION_TYPE = "scaled_embed_sqrt_d"
+    NORMALIZATION_TYPE = None
     N_LAYERS = 1
 
     # layer_norm_normalized and scaled_embed_sqrt_d aren't real
@@ -172,11 +172,11 @@ def main():
     save_figure(fig_class, PLOTS_DIR, class_filename)
     print(f"Saved {class_filename}")
 
-    # fig_bigram.tight_layout(rect=[0, 0, 0.88, 0.94])
-    # add_bigram_legend(fig_bigram)
-    # bigram_filename = f"bigram_pca_sweep_grid_Norm{norm_str}_Layers{N_LAYERS}.pdf"
-    # save_figure(fig_bigram, PLOTS_DIR, bigram_filename)
-    # print(f"Saved {bigram_filename}")
+    fig_bigram.tight_layout(rect=[0, 0, 0.88, 0.94])
+    add_bigram_legend(fig_bigram)
+    bigram_filename = f"bigram_pca_sweep_grid_Norm{norm_str}_Layers{N_LAYERS}.pdf"
+    save_figure(fig_bigram, PLOTS_DIR, bigram_filename)
+    print(f"Saved {bigram_filename}")
 
 
 if __name__ == "__main__":
